@@ -1,33 +1,38 @@
 -- client/main.lua
--- Capture: distance-gated samples of the player's position + pedal state while
--- driving. Display: a flat ribbon painted on the road, coloured by what the
--- pedals were doing at that spot (green throttle, red brake, faint white coast).
+-- Capture is fully automatic: every race lap and time-trial lap is silently
+-- recorded (position + pedal state, distance-gated). If the server says the
+-- lap beat the player's stored best for the track, the line is submitted.
+-- Display: a flat ribbon on the road — green throttle, red brake, faint white
+-- coast — auto-loaded when near a track you have a stored line on.
 --
 -- Two buffers:
---   • Display buffer (ring) — what gets drawn. Fed by manual /raceline rec, or
---     loaded with a stored best-lap line (TT ghost / proximity auto-load).
---   • Lap capture (plain array) — silently records the current time-trial lap.
---     If the server says the lap improved, this is what gets stored.
+--   • Display buffer (ring) — what gets drawn. Only ever holds loaded lines.
+--   • Cap (plain array)     — the lap currently being driven.
 
-local Points     = {}     -- display ring buffer of { x, y, z, s, brk }
-local Head       = 1      -- next write slot (the oldest entry once full)
-local Count      = 0
-local Recording  = false  -- manual recording (/raceline rec)
-local Visible    = false
-local ForceBreak = true   -- next manual sample starts a new segment run
+local Points  = {}     -- display ring buffer of { x, y, z, s, brk }
+local Head    = 1      -- next write slot (the oldest entry once full)
+local Count   = 0
+local Visible = false
 
-local Quads = {}          -- precomputed visible ribbon segments
+local Quads = {}       -- precomputed visible ribbon segments
 
--- Time-trial integration
-local Cap         = {}    -- current-lap capture
-local LastLap     = {}    -- frozen copy of the last completed lap
-local Capturing   = false
-local TTTrack     = nil   -- track name while in a time trial
-local AutoShown   = false -- display buffer holds an auto-loaded line
-local LoadedTrack = nil   -- which track's line is in the display buffer
-local PendingLoad = nil   -- track whose line we've requested from the server
-local Anchors     = {}    -- { { track, best, x, y, z }, ... }
-local LineCache   = {}    -- track -> { points = ordered array, best = ms }
+-- Automatic capture state
+local Cap          = {}     -- current-lap capture
+local LastLap      = {}     -- frozen copy of the last completed lap
+local LastLapReady = false  -- LastLap holds a submittable line
+local SubmitTrack  = nil    -- server asked for a line we haven't closed yet
+local Capturing    = false
+local TTTrack      = nil    -- track name while in a time trial
+local TTType       = nil    -- "circuit" | "sprint" while in a time trial
+local InRace       = false
+local HadLapEvent  = false  -- race: saw at least one SPZ:lapComplete (circuit)
+
+-- Auto-display state
+local AutoShown   = false   -- display buffer holds an auto-loaded line
+local LoadedTrack = nil     -- which track's line is in the display buffer
+local PendingLoad = nil     -- track whose line we've requested from the server
+local Anchors     = {}      -- { { track, best, x, y, z }, ... }
+local LineCache   = {}      -- track -> { points = ordered array, best = ms }
 
 local C = Config.Colours
 local StateColour = { [0] = C.coast, [1] = C.accel, [2] = C.brake }
@@ -59,7 +64,6 @@ end
 local function ClearLine()
     Points, Head, Count = {}, 1, 0
     Quads = {}
-    ForceBreak = true
 end
 
 -- ── Line (de)serialisation ────────────────────────────────────────────────────
@@ -94,9 +98,28 @@ end
 -- Replace the display buffer with an ordered point array.
 local function FillDisplay(pts)
     ClearLine()
-    for i = 1, math.min(#pts, Config.MaxPoints) do
+    local n = math.min(#pts, Config.MaxPoints)
+    for i = 1, n do
         local p = pts[i]
         PushPoint(p.x, p.y, p.z, p.s or 0, (i == 1) or p.brk or false)
+    end
+
+    -- Loop closure: a circuit lap ends where it began, but sampling and event
+    -- latency leave a seam gap between the last and first point. If the ends
+    -- are close, bridge them with interpolated points so the ribbon reads as
+    -- one continuous loop.
+    if n >= 3 then
+        local first, last = pts[1], pts[n]
+        local dx, dy, dz = first.x - last.x, first.y - last.y, first.z - last.z
+        local d = math.sqrt(dx * dx + dy * dy)
+        if d > 0.5 and d <= Config.LoopCloseRange then
+            local steps = math.max(1, math.floor(d / Config.SampleDistance))
+            for i = 1, steps - 1 do
+                local t = i / steps
+                PushPoint(last.x + dx * t, last.y + dy * t, last.z + dz * t, last.s, false)
+            end
+            PushPoint(first.x, first.y, first.z, first.s, false)
+        end
     end
 end
 
@@ -134,10 +157,9 @@ end
 CreateThread(function()
     local lastX, lastY
     while true do
-        local active = Recording or Capturing
-        Wait(active and 50 or 400)
+        Wait(Capturing and 50 or 400)
 
-        if active then
+        if Capturing then
             local ped = PlayerPedId()
             local veh = GetVehiclePedIsIn(ped, false)
 
@@ -149,33 +171,43 @@ CreateThread(function()
                 if lastX == nil or (dx * dx + dy * dy) >= Config.SampleDistance ^ 2 then
                     -- Teleport / respawn: don't draw a line across the map
                     local jump = lastX ~= nil and (dx * dx + dy * dy) > Config.BreakDistance ^ 2
-                    local z = GroundedZ(pos)
-                    local s = PedalState()
-
-                    if Recording then
-                        PushPoint(pos.x, pos.y, z, s, ForceBreak or jump)
-                        ForceBreak = false
-                    end
-                    if Capturing and #Cap < Config.MaxPoints then
-                        Cap[#Cap + 1] = { x = pos.x, y = pos.y, z = z, s = s, brk = (#Cap == 0) or jump }
+                    if #Cap < Config.MaxPoints then
+                        Cap[#Cap + 1] = {
+                            x = pos.x, y = pos.y, z = GroundedZ(pos),
+                            s = PedalState(), brk = (#Cap == 0) or jump,
+                        }
                     end
                     lastX, lastY = pos.x, pos.y
                 end
-            else
-                ForceBreak = true   -- left the driver seat: next run starts fresh
             end
         else
-            ForceBreak = true
             lastX, lastY = nil, nil
         end
     end
 end)
 
+-- Freeze the current capture as the last completed lap.
+local function FreezeLap()
+    LastLap, LastLapReady = Cap, true
+    Cap = {}
+    -- A deferred submit (circuit TT waiting for the loop to close) fires now
+    if SubmitTrack and #LastLap > 1 then
+        TriggerServerEvent("spz-raceline:submitCapture", SubmitTrack, FlattenLine(LastLap))
+        SubmitTrack = nil
+    end
+end
+
+local function StopCapture()
+    Capturing, Cap, SubmitTrack = false, {}, nil
+end
+
 -- ── Time-trial hooks (events already broadcast by spz-races) ─────────────────
 
 RegisterNetEvent("SPZ:tt:Begin", function(data)
     TTTrack = data and data.track and data.track.name or nil
-    Cap, Capturing = {}, false
+    TTType  = data and data.track and data.track.type or nil
+    StopCapture()
+    LastLapReady = false
     if not TTTrack then return end
 
     -- Show the stored best line as a ghost while practising
@@ -187,43 +219,101 @@ RegisterNetEvent("SPZ:tt:Begin", function(data)
     end
 end)
 
+-- CP1 crossing. On circuits this is ALSO what closes the previous lap's loop:
+-- the lap "ends" at the final checkpoint, but the stretch from there back to
+-- the start line (BETWEEN_LAPS) belongs to the loop — so capture runs through
+-- it and the lap is only frozen here, when the line truly meets its start.
 RegisterNetEvent("SPZ:tt:LapStarted", function()
     if not TTTrack then return end
-    Cap, Capturing = {}, true
+    if Capturing and #Cap > 1 then
+        FreezeLap()
+    else
+        Cap = {}
+    end
+    Capturing = true
 end)
 
--- Freeze the finished lap into its own buffer. The server's requestCapture
--- arrives after a DB round-trip — on circuits the player can cross CP1 and
--- start the next lap (which resets Cap) before that, so reading Cap directly
--- would lose the line.
 RegisterNetEvent("SPZ:tt:LapComplete", function()
-    Capturing = false
-    LastLap = Cap
+    if not TTTrack then return end
+    if TTType == "sprint" then
+        -- Point-to-point: no loop to close, freeze at the finish line
+        FreezeLap()
+        Capturing = false
+    end
+    -- Circuits: keep capturing through BETWEEN_LAPS (see LapStarted)
 end)
 
 RegisterNetEvent("SPZ:tt:Restarted", function()
-    Cap, LastLap, Capturing = {}, {}, false
+    -- Lap aborted mid-drive. If the server already asked for the previous
+    -- lap's line, send what we have — the time was legit, only the loop-close
+    -- bridge is missing.
+    if SubmitTrack and #Cap > 1 then FreezeLap() end
+    StopCapture()
 end)
 
 RegisterNetEvent("SPZ:tt:End", function()
-    TTTrack, Cap, LastLap, Capturing = nil, {}, {}, false
+    if SubmitTrack and #Cap > 1 then FreezeLap() end
+    StopCapture()
+    TTTrack, TTType = nil, nil
     ClearAutoDisplay()   -- proximity scan will re-show it if still near
+end)
+
+-- ── Race hooks ────────────────────────────────────────────────────────────────
+-- Race lap boundaries are measured at the final checkpoint and capture runs
+-- continuously, so each frozen race lap naturally contains the full loop.
+
+RegisterNetEvent("SPZ:go", function()
+    InRace, HadLapEvent = true, false
+    Cap, LastLapReady = {}, false
+    Capturing = true
+end)
+
+RegisterNetEvent("SPZ:lapComplete", function()
+    if not InRace then return end
+    HadLapEvent = true
+    FreezeLap()          -- Cap resets; capture continues into the next lap
+end)
+
+RegisterNetEvent("SPZ:raceFinished", function()
+    if not InRace then return end
+    -- Sprints never fire SPZ:lapComplete — the whole run is the lap. On
+    -- circuits every lap was already frozen at its boundary; the leftover
+    -- stub (final CP → finish line) must not overwrite it.
+    if not HadLapEvent and #Cap > 1 then
+        FreezeLap()
+    end
+    Capturing, Cap = false, {}
+end)
+
+-- Race over for everyone (results broadcast) or this player DNF'd/teleported
+-- out — either way the race capture is done.
+RegisterNetEvent("SPZ:raceEnd", function()
+    InRace = false
+    StopCapture()
+end)
+
+RegisterNetEvent("SPZ:tpToSafeZone", function()
+    InRace = false
+    StopCapture()
 end)
 
 -- ── Server round-trips ────────────────────────────────────────────────────────
 
 RegisterNetEvent("spz-raceline:requestCapture", function(track)
-    if #LastLap > 1 then
+    if LastLapReady and #LastLap > 1 then
         TriggerServerEvent("spz-raceline:submitCapture", track, FlattenLine(LastLap))
+    else
+        -- Circuit TT: the improved lap's loop hasn't closed yet (player is
+        -- still driving final CP → start line). FreezeLap submits it then.
+        SubmitTrack = track
     end
 end)
 
 RegisterNetEvent("spz-raceline:saved", function(track, bestMs, anchor)
     -- The freshly driven lap is the new best line — cache it and, if we're
-    -- still on that track, swap the ghost immediately. Cap is NOT touched:
-    -- the next lap may already be capturing into it.
+    -- still on that track, swap the ghost immediately.
     LineCache[track] = { points = LastLap, best = bestMs }
-    LastLap = {}
+    LastLap, LastLapReady = {}, false
 
     local found = false
     for i = 1, #Anchors do
@@ -252,13 +342,13 @@ RegisterNetEvent("spz-raceline:line", function(track, flat, bestMs)
 
     if TTTrack == track or PendingLoad == track then
         PendingLoad = nil
-        if not Recording then LoadDisplay(track) end
+        LoadDisplay(track)
     end
 end)
 
 -- ── Proximity auto-load ───────────────────────────────────────────────────────
 -- When the player comes near where one of their stored lines starts, show it;
--- hide it again when they leave. Manual recording and time trials take priority.
+-- hide it again when they leave. Time trials and races pin the current line.
 
 CreateThread(function()
     Wait(5000)   -- let identity load the profile first
@@ -267,7 +357,7 @@ CreateThread(function()
     while true do
         Wait(Config.AutoScanMs)
 
-        if not TTTrack and not Recording and #Anchors > 0 then
+        if not TTTrack and not InRace and #Anchors > 0 then
             local pos = GetEntityCoords(PlayerPedId())
             local nearest, nearestDist
 
@@ -374,33 +464,14 @@ local function SetVisible(on)
     Notify(on and "Raceline: display ~g~ON~s~" or "Raceline: display ~r~OFF~s~")
 end
 
-local function SetRecording(on)
-    Recording = on
-    if on then
-        -- Manual recording owns the display buffer: evict any auto-loaded line
-        if AutoShown then
-            ClearLine()
-            AutoShown, LoadedTrack = false, nil
-        end
-        if not Visible then Visible = true end
-    end
-    Notify(on and "Raceline: recording ~g~ON~s~" or "Raceline: recording ~r~OFF~s~")
-end
-
 RegisterCommand("raceline", function(_, args)
     local sub = (args[1] or ""):lower()
-    if sub == "rec" or sub == "record" then
-        SetRecording(not Recording)
-    elseif sub == "show" then
+    if sub == "show" then
         SetVisible(true)
     elseif sub == "hide" then
         SetVisible(false)
-    elseif sub == "clear" then
-        ClearLine()
-        AutoShown, LoadedTrack = false, nil
-        Notify("Raceline: ~y~cleared~s~")
     else
-        Notify("Usage: /raceline rec | show | hide | clear")
+        Notify("Usage: /raceline show | hide")
     end
 end, false)
 
@@ -412,9 +483,6 @@ RegisterKeyMapping("racelinetoggle", "Raceline: Toggle Display", "keyboard", "")
 
 -- ── Exports ───────────────────────────────────────────────────────────────────
 
-exports("StartRecording", function() SetRecording(true) end)
-exports("StopRecording",  function() SetRecording(false) end)
-exports("IsRecording",    function() return Recording end)
 exports("SetLineVisible", SetVisible)
 exports("IsLineVisible",  function() return Visible end)
 exports("ClearLine", function()

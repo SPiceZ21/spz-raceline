@@ -2,8 +2,8 @@ fx_version 'cerulean'
 game 'gta5'
 
 name 'spz-raceline'
-description 'SPiceZ Raceline — capture your driving line and paint it on the road (green = throttle, red = brake); stores your best-lap line per time-trial track'
-version '0.2.0'
+description 'SPiceZ Raceline — auto-records your race and time-trial laps, stores the best-lap line per track, and paints it on the road (green = throttle, red = brake)'
+version '0.3.0'
 author 'SPiceZ-Core'
 lua54 'yes'
 

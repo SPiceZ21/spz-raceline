@@ -29,3 +29,4 @@ Config.Colours = {
 Config.AutoLoadRange   = 150.0   -- metres from a stored line's start to auto-show it
 Config.AutoUnloadRange = 220.0   -- hysteresis: hide again beyond this
 Config.AutoScanMs      = 3000    -- proximity check interval
+Config.LoopCloseRange  = 60.0    -- if a line ends within this of its start, close the loop

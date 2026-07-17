@@ -1,7 +1,7 @@
 -- server/main.lua
 -- Persistence + the only authority on "did the time improve".
 --
--- Flow: spz-races finishes a TT lap → fires spz-raceline:tt:lapCompleted here
+-- Flow: spz-races finishes a race/TT lap → fires spz-raceline:lapCompleted here
 -- with the SERVER-measured lap time → we compare against the stored best and,
 -- only if faster, ask that client for its captured line. The client never
 -- supplies a time — the pending token pins the time we were told by spz-races,
@@ -27,9 +27,10 @@ local function AwaitPlayerDbId(src, timeoutMs)
     return nil
 end
 
--- ── Lap completed (server-local event, fired by spz-races/server/timetrail.lua)
+-- ── Lap completed (server-local event, fired by spz-races for both races and
+--    time trials — timetrail.lua and checkpoints.lua)
 
-AddEventHandler("spz-raceline:tt:lapCompleted", function(src, trackName, lapTimeMs)
+AddEventHandler("spz-raceline:lapCompleted", function(src, trackName, lapTimeMs)
     if type(trackName) ~= "string" or type(lapTimeMs) ~= "number" or lapTimeMs <= 0 then return end
 
     local pid = PlayerDbId(src)
