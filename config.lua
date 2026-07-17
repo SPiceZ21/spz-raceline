@@ -21,3 +21,11 @@ Config.Colours = {
     brake = { r = 235, g = 45,  b = 45,  a = 150 },  -- red: on brakes
     coast = { r = 235, g = 235, b = 235, a = 100 },  -- faint white: neither
 }
+
+-- ── Time-trial persistence ────────────────────────────────────────────────────
+-- Best-lap lines are stored per player per track (only when the lap time
+-- improves) and auto-load when the player comes near where the line starts.
+
+Config.AutoLoadRange   = 150.0   -- metres from a stored line's start to auto-show it
+Config.AutoUnloadRange = 220.0   -- hysteresis: hide again beyond this
+Config.AutoScanMs      = 3000    -- proximity check interval

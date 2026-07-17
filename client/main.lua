@@ -3,16 +3,31 @@
 -- driving. Display: a flat ribbon painted on the road, coloured by what the
 -- pedals were doing at that spot (green throttle, red brake, faint white coast).
 --
--- Fully standalone — no framework, no server side, no NUI.
+-- Two buffers:
+--   • Display buffer (ring) — what gets drawn. Fed by manual /raceline rec, or
+--     loaded with a stored best-lap line (TT ghost / proximity auto-load).
+--   • Lap capture (plain array) — silently records the current time-trial lap.
+--     If the server says the lap improved, this is what gets stored.
 
-local Points     = {}     -- ring buffer of { x, y, z, s, brk }
+local Points     = {}     -- display ring buffer of { x, y, z, s, brk }
 local Head       = 1      -- next write slot (the oldest entry once full)
 local Count      = 0
-local Recording  = false
+local Recording  = false  -- manual recording (/raceline rec)
 local Visible    = false
-local ForceBreak = true   -- next sample starts a new segment run
+local ForceBreak = true   -- next manual sample starts a new segment run
 
 local Quads = {}          -- precomputed visible ribbon segments
+
+-- Time-trial integration
+local Cap         = {}    -- current-lap capture
+local LastLap     = {}    -- frozen copy of the last completed lap
+local Capturing   = false
+local TTTrack     = nil   -- track name while in a time trial
+local AutoShown   = false -- display buffer holds an auto-loaded line
+local LoadedTrack = nil   -- which track's line is in the display buffer
+local PendingLoad = nil   -- track whose line we've requested from the server
+local Anchors     = {}    -- { { track, best, x, y, z }, ... }
+local LineCache   = {}    -- track -> { points = ordered array, best = ms }
 
 local C = Config.Colours
 local StateColour = { [0] = C.coast, [1] = C.accel, [2] = C.brake }
@@ -21,6 +36,10 @@ local function Notify(msg)
     BeginTextCommandThefeedPost("STRING")
     AddTextComponentSubstringPlayerName(msg)
     EndTextCommandThefeedPostTicker(false, false)
+end
+
+local function FmtMs(ms)
+    return string.format("%d:%05.2f", math.floor(ms / 60000), (ms % 60000) / 1000)
 end
 
 -- ── Ring buffer ───────────────────────────────────────────────────────────────
@@ -43,6 +62,59 @@ local function ClearLine()
     ForceBreak = true
 end
 
+-- ── Line (de)serialisation ────────────────────────────────────────────────────
+-- Wire/DB format: flat array of x, y, z, state quadruples. brk is folded into
+-- the state as +4 (states are 0..2, so 4..6 = same state + break marker).
+
+local function FlattenLine(pts)
+    local flat = {}
+    for i = 1, #pts do
+        local p = pts[i]
+        local n = (i - 1) * 4
+        flat[n + 1] = math.floor(p.x * 100 + 0.5) / 100
+        flat[n + 2] = math.floor(p.y * 100 + 0.5) / 100
+        flat[n + 3] = math.floor(p.z * 100 + 0.5) / 100
+        flat[n + 4] = p.s + (p.brk and 4 or 0)
+    end
+    return flat
+end
+
+local function ExpandLine(flat)
+    local pts = {}
+    for i = 1, #flat, 4 do
+        local s = flat[i + 3] or 0
+        pts[#pts + 1] = {
+            x = flat[i], y = flat[i + 1], z = flat[i + 2],
+            s = s % 4, brk = s >= 4,
+        }
+    end
+    return pts
+end
+
+-- Replace the display buffer with an ordered point array.
+local function FillDisplay(pts)
+    ClearLine()
+    for i = 1, math.min(#pts, Config.MaxPoints) do
+        local p = pts[i]
+        PushPoint(p.x, p.y, p.z, p.s or 0, (i == 1) or p.brk or false)
+    end
+end
+
+local function LoadDisplay(track)
+    local entry = LineCache[track]
+    if not entry then return false end
+    FillDisplay(entry.points)
+    Visible, AutoShown, LoadedTrack = true, true, track
+    Notify(("Raceline: ~g~%s~s~ best line loaded (%s)"):format(track, FmtMs(entry.best or 0)))
+    return true
+end
+
+local function ClearAutoDisplay()
+    if not AutoShown then return end
+    ClearLine()
+    Visible, AutoShown, LoadedTrack = false, false, nil
+end
+
 -- ── Capture ───────────────────────────────────────────────────────────────────
 
 local function PedalState()
@@ -62,9 +134,10 @@ end
 CreateThread(function()
     local lastX, lastY
     while true do
-        Wait(Recording and 50 or 400)
+        local active = Recording or Capturing
+        Wait(active and 50 or 400)
 
-        if Recording then
+        if active then
             local ped = PlayerPedId()
             local veh = GetVehiclePedIsIn(ped, false)
 
@@ -74,13 +147,18 @@ CreateThread(function()
                 local dy = pos.y - (lastY or pos.y)
 
                 if lastX == nil or (dx * dx + dy * dy) >= Config.SampleDistance ^ 2 then
-                    local brk = ForceBreak
-                    if lastX and not brk then
-                        -- Teleport / respawn: don't draw a line across the map
-                        brk = (dx * dx + dy * dy) > Config.BreakDistance ^ 2
+                    -- Teleport / respawn: don't draw a line across the map
+                    local jump = lastX ~= nil and (dx * dx + dy * dy) > Config.BreakDistance ^ 2
+                    local z = GroundedZ(pos)
+                    local s = PedalState()
+
+                    if Recording then
+                        PushPoint(pos.x, pos.y, z, s, ForceBreak or jump)
+                        ForceBreak = false
                     end
-                    PushPoint(pos.x, pos.y, GroundedZ(pos), PedalState(), brk)
-                    ForceBreak = false
+                    if Capturing and #Cap < Config.MaxPoints then
+                        Cap[#Cap + 1] = { x = pos.x, y = pos.y, z = z, s = s, brk = (#Cap == 0) or jump }
+                    end
                     lastX, lastY = pos.x, pos.y
                 end
             else
@@ -89,6 +167,131 @@ CreateThread(function()
         else
             ForceBreak = true
             lastX, lastY = nil, nil
+        end
+    end
+end)
+
+-- ── Time-trial hooks (events already broadcast by spz-races) ─────────────────
+
+RegisterNetEvent("SPZ:tt:Begin", function(data)
+    TTTrack = data and data.track and data.track.name or nil
+    Cap, Capturing = {}, false
+    if not TTTrack then return end
+
+    -- Show the stored best line as a ghost while practising
+    if LineCache[TTTrack] then
+        LoadDisplay(TTTrack)
+    else
+        PendingLoad = TTTrack
+        TriggerServerEvent("spz-raceline:getLine", TTTrack)
+    end
+end)
+
+RegisterNetEvent("SPZ:tt:LapStarted", function()
+    if not TTTrack then return end
+    Cap, Capturing = {}, true
+end)
+
+-- Freeze the finished lap into its own buffer. The server's requestCapture
+-- arrives after a DB round-trip — on circuits the player can cross CP1 and
+-- start the next lap (which resets Cap) before that, so reading Cap directly
+-- would lose the line.
+RegisterNetEvent("SPZ:tt:LapComplete", function()
+    Capturing = false
+    LastLap = Cap
+end)
+
+RegisterNetEvent("SPZ:tt:Restarted", function()
+    Cap, LastLap, Capturing = {}, {}, false
+end)
+
+RegisterNetEvent("SPZ:tt:End", function()
+    TTTrack, Cap, LastLap, Capturing = nil, {}, {}, false
+    ClearAutoDisplay()   -- proximity scan will re-show it if still near
+end)
+
+-- ── Server round-trips ────────────────────────────────────────────────────────
+
+RegisterNetEvent("spz-raceline:requestCapture", function(track)
+    if #LastLap > 1 then
+        TriggerServerEvent("spz-raceline:submitCapture", track, FlattenLine(LastLap))
+    end
+end)
+
+RegisterNetEvent("spz-raceline:saved", function(track, bestMs, anchor)
+    -- The freshly driven lap is the new best line — cache it and, if we're
+    -- still on that track, swap the ghost immediately. Cap is NOT touched:
+    -- the next lap may already be capturing into it.
+    LineCache[track] = { points = LastLap, best = bestMs }
+    LastLap = {}
+
+    local found = false
+    for i = 1, #Anchors do
+        if Anchors[i].track == track then
+            Anchors[i].best = bestMs
+            Anchors[i].x, Anchors[i].y, Anchors[i].z = anchor.x, anchor.y, anchor.z
+            found = true
+            break
+        end
+    end
+    if not found then
+        Anchors[#Anchors + 1] = { track = track, best = bestMs, x = anchor.x, y = anchor.y, z = anchor.z }
+    end
+
+    Notify(("Raceline: ~g~new best line saved~s~ — %s (%s)"):format(track, FmtMs(bestMs)))
+    if TTTrack == track then LoadDisplay(track) end
+end)
+
+RegisterNetEvent("spz-raceline:anchors", function(list)
+    Anchors = type(list) == "table" and list or {}
+end)
+
+RegisterNetEvent("spz-raceline:line", function(track, flat, bestMs)
+    if type(flat) ~= "table" then return end
+    LineCache[track] = { points = ExpandLine(flat), best = bestMs }
+
+    if TTTrack == track or PendingLoad == track then
+        PendingLoad = nil
+        if not Recording then LoadDisplay(track) end
+    end
+end)
+
+-- ── Proximity auto-load ───────────────────────────────────────────────────────
+-- When the player comes near where one of their stored lines starts, show it;
+-- hide it again when they leave. Manual recording and time trials take priority.
+
+CreateThread(function()
+    Wait(5000)   -- let identity load the profile first
+    TriggerServerEvent("spz-raceline:getAnchors")
+
+    while true do
+        Wait(Config.AutoScanMs)
+
+        if not TTTrack and not Recording and #Anchors > 0 then
+            local pos = GetEntityCoords(PlayerPedId())
+            local nearest, nearestDist
+
+            for i = 1, #Anchors do
+                local a = Anchors[i]
+                local dx, dy = pos.x - a.x, pos.y - a.y
+                local d = math.sqrt(dx * dx + dy * dy)
+                if not nearestDist or d < nearestDist then
+                    nearest, nearestDist = a, d
+                end
+            end
+
+            if nearest and nearestDist <= Config.AutoLoadRange then
+                if LoadedTrack ~= nearest.track then
+                    if LineCache[nearest.track] then
+                        LoadDisplay(nearest.track)
+                    elseif PendingLoad ~= nearest.track then
+                        PendingLoad = nearest.track
+                        TriggerServerEvent("spz-raceline:getLine", nearest.track)
+                    end
+                end
+            elseif AutoShown and (not nearest or nearestDist > Config.AutoUnloadRange) then
+                ClearAutoDisplay()
+            end
         end
     end
 end)
@@ -173,9 +376,13 @@ end
 
 local function SetRecording(on)
     Recording = on
-    if on and not Visible then
-        -- Seeing the line paint itself live is the point — show it too.
-        Visible = true
+    if on then
+        -- Manual recording owns the display buffer: evict any auto-loaded line
+        if AutoShown then
+            ClearLine()
+            AutoShown, LoadedTrack = false, nil
+        end
+        if not Visible then Visible = true end
     end
     Notify(on and "Raceline: recording ~g~ON~s~" or "Raceline: recording ~r~OFF~s~")
 end
@@ -190,6 +397,7 @@ RegisterCommand("raceline", function(_, args)
         SetVisible(false)
     elseif sub == "clear" then
         ClearLine()
+        AutoShown, LoadedTrack = false, nil
         Notify("Raceline: ~y~cleared~s~")
     else
         Notify("Usage: /raceline rec | show | hide | clear")
@@ -203,8 +411,6 @@ end, false)
 RegisterKeyMapping("racelinetoggle", "Raceline: Toggle Display", "keyboard", "")
 
 -- ── Exports ───────────────────────────────────────────────────────────────────
--- For future integration (e.g. spz-races auto-recording a race, or ghost lines
--- loaded from another player) without this resource knowing about any of it.
 
 exports("StartRecording", function() SetRecording(true) end)
 exports("StopRecording",  function() SetRecording(false) end)
@@ -213,9 +419,10 @@ exports("SetLineVisible", SetVisible)
 exports("IsLineVisible",  function() return Visible end)
 exports("ClearLine", function()
     ClearLine()
+    AutoShown, LoadedTrack = false, nil
 end)
 
--- Ordered oldest → newest copy of the current line.
+-- Ordered oldest → newest copy of the current display line.
 exports("GetLine", function()
     local out = {}
     for k = 0, Count - 1 do
@@ -225,15 +432,10 @@ exports("GetLine", function()
     return out
 end)
 
--- Replace the buffer with an externally captured line (same point format).
+-- Replace the display buffer with an externally captured line (same format).
 exports("LoadLine", function(pts)
     if type(pts) ~= "table" then return false end
-    ClearLine()
-    for i = 1, math.min(#pts, Config.MaxPoints) do
-        local p = pts[i]
-        if type(p) == "table" and p.x and p.y and p.z then
-            PushPoint(p.x + 0.0, p.y + 0.0, p.z + 0.0, p.s or 0, p.brk or (i == 1))
-        end
-    end
+    FillDisplay(pts)
+    AutoShown, LoadedTrack = false, nil
     return Count > 0
 end)
