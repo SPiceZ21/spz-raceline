@@ -22,12 +22,22 @@ you coasted.
   (`Config.AutoLoadRange`, default 150 m from the line's start) and it loads
   and displays automatically; it hides again when you leave.
 
+## Ghost car
+
+In time trials your stored best lap replays as a **translucent ghost car** —
+your own vehicle model, brake lights lighting up where you braked. It launches
+in sync with each lap start (CP1 crossing), fades out when its lap is done,
+and swaps to the new line the moment you set a faster one. Lines recorded from
+v0.4 onward carry per-point timing so the ghost accelerates and brakes exactly
+where you did; older lines replay at distance-proportional pace.
+
 ## Commands
 
 | Command | Effect |
 |---|---|
 | `/raceline show` | Show the line |
 | `/raceline hide` | Hide the line |
+| `/raceline ghost` | Toggle the time-trial ghost car |
 
 `Raceline: Toggle Display` is also bindable in Settings → Key Bindings.
 

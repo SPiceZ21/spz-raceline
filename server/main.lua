@@ -48,19 +48,26 @@ end)
 
 -- ── Line submission (client → server, only valid against a pending token) ────
 
-RegisterNetEvent("spz-raceline:submitCapture", function(track, flat)
+RegisterNetEvent("spz-raceline:submitCapture", function(track, payload)
     local src = source
     local p = Pending[src]
     if not p or p.track ~= track or GetGameTimer() > p.expires then return end
     Pending[src] = nil
 
-    -- flat = { x, y, z, state, x, y, z, state, ... }
+    -- v2 payload: { v = 2, m = modelHash, p = { x, y, z, state, t, ... } }
+    if type(payload) ~= "table" or payload.v ~= 2 then return end
+    if type(payload.m) ~= "number" then return end
+    local flat = payload.p
     if type(flat) ~= "table" then return end
+
     local n = #flat
-    if n < 8 or n % 4 ~= 0 or n > Config.MaxPoints * 4 then return end
+    if n < 10 or n % 5 ~= 0 or n > Config.MaxPoints * 5 then return end
     for i = 1, n do
         if type(flat[i]) ~= "number" then return end
     end
+    -- Per-point times must be sane: within the lap, non-negative
+    local lastT = flat[n]
+    if lastT < 0 or lastT > p.ms + 60000 then return end
 
     MySQL.query.await([[
         INSERT INTO racelines (player_id, track, best_ms, anchor_x, anchor_y, anchor_z, points)
@@ -71,7 +78,8 @@ RegisterNetEvent("spz-raceline:submitCapture", function(track, flat)
             anchor_y = VALUES(anchor_y),
             anchor_z = VALUES(anchor_z),
             points   = VALUES(points)
-    ]], { p.pid, track, p.ms, flat[1], flat[2], flat[3], json.encode(flat) })
+    ]], { p.pid, track, p.ms, flat[1], flat[2], flat[3],
+          json.encode({ v = 2, m = payload.m, p = flat }) })
 
     TriggerClientEvent("spz-raceline:saved", src, track, p.ms, { x = flat[1], y = flat[2], z = flat[3] })
 end)

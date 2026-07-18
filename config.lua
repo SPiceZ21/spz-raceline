@@ -30,3 +30,15 @@ Config.AutoLoadRange   = 150.0   -- metres from a stored line's start to auto-sh
 Config.AutoUnloadRange = 220.0   -- hysteresis: hide again beyond this
 Config.AutoScanMs      = 3000    -- proximity check interval
 Config.LoopCloseRange  = 60.0    -- if a line ends within this of its start, close the loop
+
+-- ── Ghost car (time trials) ───────────────────────────────────────────────────
+-- Replays your stored best lap as a translucent car to race against. Uses the
+-- per-point timing captured with the line (v2 lines); older v1 lines replay at
+-- distance-proportional pace.
+Config.Ghost = {
+    enabled       = true,
+    alpha         = 150,       -- 0-255 ghost transparency
+    zLift         = 0.45,      -- points are at road height; lift to axle height
+    fallbackModel = `sultan`,  -- used when the line predates model capture (v1)
+    headingLerp   = 10.0,      -- yaw smoothing factor (higher = snappier)
+}
