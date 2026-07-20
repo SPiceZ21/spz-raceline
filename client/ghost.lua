@@ -3,10 +3,14 @@
 -- translucent, non-collidable vehicle. Starts in sync with each lap (CP1
 -- crossing) and fades out when its lap is done; you race your own best.
 --
--- Timing: v2 lines carry per-point ms-since-lap-start, so the ghost brakes and
+-- Timing: v2/v3 lines carry per-point ms-since-lap-start, so the ghost brakes and
 -- accelerates exactly where you did. v1 lines (recorded before timing existed)
 -- get distance-proportional timing over the stored lap time — constant pace,
 -- still a usable reference.
+--
+-- The line also carries CP split times (v3) for pace comparison at each
+-- checkpoint, but the ghost itself runs a clean full-lap replay driven
+-- entirely by per-point timing — no clock corrections mid-lap.
 --
 -- Reads the line cache from client/main.lua via the RL_GetEntry global (both
 -- files share this resource's Lua environment).
@@ -30,7 +34,7 @@ local function BuildRoute(entry)
 
     local times = {}
     if pts[1].t ~= nil and pts[#pts].t ~= nil and pts[#pts].t > 0 then
-        -- v2: true captured timing
+        -- v2/v3: true captured timing
         for i = 1, #pts do times[i] = pts[i].t or 0 end
     else
         -- v1 fallback: distribute the stored lap time over cumulative distance

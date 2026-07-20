@@ -54,8 +54,8 @@ RegisterNetEvent("spz-raceline:submitCapture", function(track, payload)
     if not p or p.track ~= track or GetGameTimer() > p.expires then return end
     Pending[src] = nil
 
-    -- v2 payload: { v = 2, m = modelHash, p = { x, y, z, state, t, ... } }
-    if type(payload) ~= "table" or payload.v ~= 2 then return end
+    -- v2/v3 payload: { v = 2|3, m = modelHash, p = { x, y, z, state, t, ... }, c = splits? }
+    if type(payload) ~= "table" or (payload.v ~= 2 and payload.v ~= 3) then return end
     if type(payload.m) ~= "number" then return end
     local flat = payload.p
     if type(flat) ~= "table" then return end
@@ -69,6 +69,19 @@ RegisterNetEvent("spz-raceline:submitCapture", function(track, payload)
     local lastT = flat[n]
     if lastT < 0 or lastT > p.ms + 60000 then return end
 
+    -- v3 carries CP split times; validate them minimally
+    local splits = nil
+    if payload.v == 3 and type(payload.c) == "table" then
+        local clean = true
+        for _, v in pairs(payload.c) do
+            if type(v) ~= "number" or v < 0 then clean = false; break end
+        end
+        if clean then splits = payload.c end
+    end
+
+    -- Normalise to v3 for storage (splits may be empty table for v2 upgrades)
+    local stored = { v = 3, m = payload.m, p = flat, c = splits or {} }
+
     MySQL.query.await([[
         INSERT INTO racelines (player_id, track, best_ms, anchor_x, anchor_y, anchor_z, points)
         VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -79,7 +92,7 @@ RegisterNetEvent("spz-raceline:submitCapture", function(track, payload)
             anchor_z = VALUES(anchor_z),
             points   = VALUES(points)
     ]], { p.pid, track, p.ms, flat[1], flat[2], flat[3],
-          json.encode({ v = 2, m = payload.m, p = flat }) })
+          json.encode(stored) })
 
     TriggerClientEvent("spz-raceline:saved", src, track, p.ms, { x = flat[1], y = flat[2], z = flat[3] })
 end)

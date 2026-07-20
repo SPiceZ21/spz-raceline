@@ -23,6 +23,8 @@ local LastLapReady = false  -- LastLap holds a submittable line
 local CapStart     = 0      -- GetGameTimer() when the current lap capture began
 local CapModel     = nil    -- vehicle model hash driven this lap (for the ghost)
 local LastLapModel = nil    -- model frozen alongside LastLap
+local CapSplits    = {}     -- [logicalCpIndex] = ms since CapStart at each CP crossing
+local LastLapSplits = nil   -- frozen alongside LastLap
 local SubmitTrack  = nil    -- server asked for a line we haven't closed yet
 local Capturing    = false
 local TTTrack      = nil    -- track name while in a time trial
@@ -70,13 +72,23 @@ local function ClearLine()
 end
 
 -- ── Line (de)serialisation ────────────────────────────────────────────────────
--- Wire/DB format v2: { v = 2, m = modelHash, p = flat quintuples x,y,z,state,t }
--- where t = ms since lap start (drives the ghost's true pace). brk is folded
--- into state as +4 (states are 0..2, so 4..6 = same state + break marker).
--- v1 rows (plain flat quadruple array, no timing) still decode — the ghost
--- synthesises timing from distance for those.
+-- Wire/DB format v3:
+--   { v = 3, m = modelHash, p = flat quintuples x,y,z,state,t, c = cpSplits }
+--
+--   p : per-point motion data. t = ms since lap start — this is the ghost's
+--       motion source (accurate shape AND pace, ~2 m resolution).
+--   c : split times in ms at each checkpoint crossing, indexed by the LOGICAL
+--       checkpoint number. These are drift ANCHORS, not the motion source:
+--       the ghost's replay clock starts from a client event while the lap is
+--       timed on the server, so it carries a latency offset (20-80 ms) plus
+--       any frame-hitch drift. Comparing against the split at each CP lets the
+--       ghost correct itself at known-good points.
+--
+-- brk is folded into state as +4 (states are 0..2, so 4..6 = state + break).
+-- v2 rows decode without splits (pure per-point, no anchoring).
+-- v1 rows (flat quadruples, no timing) fall back to distance-proportional.
 
-local function FlattenLine(pts)
+local function FlattenLine(pts, splits)
     local flat = {}
     for i = 1, #pts do
         local p = pts[i]
@@ -88,13 +100,18 @@ local function FlattenLine(pts)
         flat[n + 5] = math.floor(p.t or 0)
     end
     -- LastLapModel first: FlattenLine always serialises the FROZEN lap
-    return { v = 2, m = LastLapModel or CapModel or 0, p = flat }
+    return {
+        v = 3,
+        m = LastLapModel or CapModel or 0,
+        p = flat,
+        c = splits or {},
+    }
 end
 
 local function ExpandLine(data)
     local pts = {}
 
-    if type(data) == "table" and data.v == 2 and type(data.p) == "table" then
+    if type(data) == "table" and (data.v == 2 or data.v == 3) and type(data.p) == "table" then
         local flat = data.p
         for i = 1, #flat, 5 do
             local s = flat[i + 3] or 0
@@ -103,10 +120,11 @@ local function ExpandLine(data)
                 s = s % 4, brk = s >= 4, t = flat[i + 4],
             }
         end
-        return pts, data.m
+        -- v2 has no splits; the ghost then runs unanchored (previous behaviour)
+        return pts, data.m, (data.v == 3) and data.c or nil
     end
 
-    -- v1: flat quadruples, no timing, no model
+    -- v1: flat quadruples, no timing, no model, no splits
     if type(data) == "table" then
         for i = 1, #data, 4 do
             local s = data[i + 3] or 0
@@ -116,7 +134,7 @@ local function ExpandLine(data)
             }
         end
     end
-    return pts, nil
+    return pts, nil, nil
 end
 
 -- Replace the display buffer with an ordered point array.
@@ -215,18 +233,20 @@ end)
 -- Freeze the current capture as the last completed lap.
 local function FreezeLap()
     LastLap, LastLapReady = Cap, true
-    LastLapModel = CapModel
-    Cap = {}
-    CapStart = GetGameTimer()   -- races: next lap's capture starts immediately
+    LastLapModel  = CapModel
+    LastLapSplits = CapSplits
+    Cap       = {}
+    CapSplits = {}
+    CapStart  = GetGameTimer()   -- races: next lap's capture starts immediately
     -- A deferred submit (circuit TT waiting for the loop to close) fires now
     if SubmitTrack and #LastLap > 1 then
-        TriggerServerEvent("spz-raceline:submitCapture", SubmitTrack, FlattenLine(LastLap))
+        TriggerServerEvent("spz-raceline:submitCapture", SubmitTrack, FlattenLine(LastLap, LastLapSplits))
         SubmitTrack = nil
     end
 end
 
 local function StopCapture()
-    Capturing, Cap, SubmitTrack = false, {}, nil
+    Capturing, Cap, CapSplits, SubmitTrack = false, {}, {}, nil
 end
 
 -- ── Time-trial hooks (events already broadcast by spz-races) ─────────────────
@@ -261,8 +281,16 @@ end)
 RegisterNetEvent("SPZ:tt:LapStarted", function()
     if not TTTrack then return end
     Cap       = {}
+    CapSplits = {}
     Capturing = true
     CapStart  = GetGameTimer()   -- lap clock starts at the line crossing
+end)
+
+-- Record CP split times for the ghost drift-correction anchors.
+-- SPZ:tt:NextCp fires on every checkpoint the player crosses mid-lap.
+RegisterNetEvent("SPZ:tt:NextCp", function(logicalIdx)
+    if not Capturing or CapStart == 0 then return end
+    CapSplits[logicalIdx] = GetGameTimer() - CapStart
 end)
 
 RegisterNetEvent("SPZ:tt:Restarted", function()
@@ -286,7 +314,7 @@ end)
 
 RegisterNetEvent("SPZ:go", function()
     InRace, HadLapEvent = true, false
-    Cap, LastLapReady = {}, false
+    Cap, CapSplits, LastLapReady = {}, {}, false
     Capturing = true
     CapStart  = GetGameTimer()
 end)
@@ -324,7 +352,7 @@ end)
 
 RegisterNetEvent("spz-raceline:requestCapture", function(track)
     if LastLapReady and #LastLap > 1 then
-        TriggerServerEvent("spz-raceline:submitCapture", track, FlattenLine(LastLap))
+        TriggerServerEvent("spz-raceline:submitCapture", track, FlattenLine(LastLap, LastLapSplits))
     else
         -- Circuit TT: the improved lap's loop hasn't closed yet (player is
         -- still driving final CP → start line). FreezeLap submits it then.
@@ -335,8 +363,8 @@ end)
 RegisterNetEvent("spz-raceline:saved", function(track, bestMs, anchor)
     -- The freshly driven lap is the new best line — cache it and, if we're
     -- still on that track, swap the ghost immediately.
-    LineCache[track] = { points = LastLap, best = bestMs, model = LastLapModel }
-    LastLap, LastLapReady = {}, false
+    LineCache[track] = { points = LastLap, best = bestMs, model = LastLapModel, splits = LastLapSplits }
+    LastLap, LastLapReady, LastLapSplits = {}, false, nil
 
     local found = false
     for i = 1, #Anchors do
@@ -361,8 +389,8 @@ end)
 
 RegisterNetEvent("spz-raceline:line", function(track, data, bestMs)
     if type(data) ~= "table" then return end
-    local pts, model = ExpandLine(data)
-    LineCache[track] = { points = pts, best = bestMs, model = model }
+    local pts, model, splits = ExpandLine(data)
+    LineCache[track] = { points = pts, best = bestMs, model = model, splits = splits }
 
     if TTTrack == track or PendingLoad == track then
         PendingLoad = nil
