@@ -249,21 +249,20 @@ end)
 
 -- CP1 crossing = the attempt has left the start line. Each TT attempt is a
 -- standalone run from a standing start, so capture always begins fresh here.
+-- Rolling laps: crossing the line fires LapComplete then LapStarted back to
+-- back. Capture never stops — the lap is frozen off and the buffer restarts in
+-- the same instant, so lap N+1's line begins exactly where lap N's ended and
+-- no samples are dropped at the seam.
+RegisterNetEvent("SPZ:tt:LapComplete", function()
+    if not TTTrack then return end
+    FreezeLap()          -- moves Cap -> LastLap and clears Cap
+end)
+
 RegisterNetEvent("SPZ:tt:LapStarted", function()
     if not TTTrack then return end
     Cap       = {}
     Capturing = true
-    CapStart  = GetGameTimer()   -- TT lap timing starts at the CP1 crossing
-end)
-
-RegisterNetEvent("SPZ:tt:LapComplete", function()
-    if not TTTrack then return end
-    -- Every TT attempt now ends at the finish line and teleports back to the
-    -- start (circuits included — there is no rolling BETWEEN_LAPS phase any
-    -- more), so the lap freezes here for both track types. The display-time
-    -- loop closure in FillDisplay bridges the start/finish seam on circuits.
-    FreezeLap()
-    Capturing = false
+    CapStart  = GetGameTimer()   -- lap clock starts at the line crossing
 end)
 
 RegisterNetEvent("SPZ:tt:Restarted", function()

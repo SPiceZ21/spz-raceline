@@ -148,6 +148,11 @@ CreateThread(function()
                 SetEntityCoordsNoOffset(GhostVeh, x, y, z, false, false, false)
                 SetEntityHeading(GhostVeh, CurHeading)
 
+                -- Camera must ignore the ghost too. Entity collision is off,
+                -- but the gameplay cam still sweeps against it and gets shoved
+                -- when you drive through the ghost — same bug as player cars.
+                DisableCamCollisionForObject(GhostVeh)
+
                 -- brake lights where you braked
                 SetVehicleBrakeLights(GhostVeh, b.s == 2)
             end
