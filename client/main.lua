@@ -30,6 +30,7 @@ local Capturing    = false
 local TTTrack      = nil    -- track name while in a time trial
 local TTType       = nil    -- "circuit" | "sprint" while in a time trial
 local InRace       = false
+local RaceTrack    = nil    -- track name while in a race
 local HadLapEvent  = false  -- race: saw at least one SPZ:lapComplete (circuit)
 
 -- Auto-display state
@@ -180,6 +181,17 @@ local function ClearAutoDisplay()
     Visible, AutoShown, LoadedTrack = false, false, nil
 end
 
+local function LoadTrackRaceline(trackName)
+    if not trackName then return end
+    if LoadedTrack == trackName then return end
+    if LineCache[trackName] then
+        LoadDisplay(trackName)
+    else
+        PendingLoad = trackName
+        TriggerServerEvent("spz-raceline:getLine", trackName)
+    end
+end
+
 -- ── Capture ───────────────────────────────────────────────────────────────────
 
 local function PedalState()
@@ -259,12 +271,7 @@ RegisterNetEvent("SPZ:tt:Begin", function(data)
     if not TTTrack then return end
 
     -- Show the stored best line as a ghost while practising
-    if LineCache[TTTrack] then
-        LoadDisplay(TTTrack)
-    else
-        PendingLoad = TTTrack
-        TriggerServerEvent("spz-raceline:getLine", TTTrack)
-    end
+    LoadTrackRaceline(TTTrack)
 end)
 
 -- CP1 crossing = the attempt has left the start line. Each TT attempt is a
@@ -305,18 +312,35 @@ RegisterNetEvent("SPZ:tt:End", function()
     if SubmitTrack and #Cap > 1 then FreezeLap() end
     StopCapture()
     TTTrack, TTType = nil, nil
-    ClearAutoDisplay()   -- proximity scan will re-show it if still near
+    ClearAutoDisplay()
 end)
 
 -- ── Race hooks ────────────────────────────────────────────────────────────────
 -- Race lap boundaries are measured at the final checkpoint and capture runs
 -- continuously, so each frozen race lap naturally contains the full loop.
 
+RegisterNetEvent("SPZ:warmupPhase", function(data)
+    if data and data.track then
+        RaceTrack = data.track
+        LoadTrackRaceline(RaceTrack)
+    end
+end)
+
+RegisterNetEvent("SPZ:stagingPhase", function(data)
+    if data and data.track then
+        RaceTrack = data.track
+        LoadTrackRaceline(RaceTrack)
+    end
+end)
+
 RegisterNetEvent("SPZ:go", function()
     InRace, HadLapEvent = true, false
     Cap, CapSplits, LastLapReady = {}, {}, false
     Capturing = true
     CapStart  = GetGameTimer()
+    if RaceTrack then
+        LoadTrackRaceline(RaceTrack)
+    end
 end)
 
 RegisterNetEvent("SPZ:lapComplete", function()
@@ -340,12 +364,23 @@ end)
 -- out — either way the race capture is done.
 RegisterNetEvent("SPZ:raceEnd", function()
     InRace = false
+    RaceTrack = nil
     StopCapture()
+    ClearAutoDisplay()
 end)
 
 RegisterNetEvent("SPZ:tpToSafeZone", function()
     InRace = false
+    RaceTrack = nil
     StopCapture()
+    ClearAutoDisplay()
+end)
+
+RegisterNetEvent("SPZ:playerDNF", function()
+    InRace = false
+    RaceTrack = nil
+    StopCapture()
+    ClearAutoDisplay()
 end)
 
 -- ── Server round-trips ────────────────────────────────────────────────────────
@@ -380,7 +415,7 @@ RegisterNetEvent("spz-raceline:saved", function(track, bestMs, anchor)
     end
 
     Notify(("Raceline: ~g~new best line saved~s~ — %s (%s)"):format(track, FmtMs(bestMs)))
-    if TTTrack == track then LoadDisplay(track) end
+    if TTTrack == track or RaceTrack == track then LoadDisplay(track) end
 end)
 
 RegisterNetEvent("spz-raceline:anchors", function(list)
@@ -392,50 +427,18 @@ RegisterNetEvent("spz-raceline:line", function(track, data, bestMs)
     local pts, model, splits = ExpandLine(data)
     LineCache[track] = { points = pts, best = bestMs, model = model, splits = splits }
 
-    if TTTrack == track or PendingLoad == track then
+    if (TTTrack == track or RaceTrack == track or PendingLoad == track)
+       and (TTTrack == track or RaceTrack == track) then
         PendingLoad = nil
         LoadDisplay(track)
     end
 end)
 
--- ── Proximity auto-load ───────────────────────────────────────────────────────
--- When the player comes near where one of their stored lines starts, show it;
--- hide it again when they leave. Time trials and races pin the current line.
+-- ── Anchor initialization ─────────────────────────────────────────────────────
 
 CreateThread(function()
     Wait(5000)   -- let identity load the profile first
     TriggerServerEvent("spz-raceline:getAnchors")
-
-    while true do
-        Wait(Config.AutoScanMs)
-
-        if not TTTrack and not InRace and #Anchors > 0 then
-            local pos = GetEntityCoords(PlayerPedId())
-            local nearest, nearestDist
-
-            for i = 1, #Anchors do
-                local a = Anchors[i]
-                local dx, dy = pos.x - a.x, pos.y - a.y
-                local d = math.sqrt(dx * dx + dy * dy)
-                if not nearestDist or d < nearestDist then
-                    nearest, nearestDist = a, d
-                end
-            end
-
-            if nearest and nearestDist <= Config.AutoLoadRange then
-                if LoadedTrack ~= nearest.track then
-                    if LineCache[nearest.track] then
-                        LoadDisplay(nearest.track)
-                    elseif PendingLoad ~= nearest.track then
-                        PendingLoad = nearest.track
-                        TriggerServerEvent("spz-raceline:getLine", nearest.track)
-                    end
-                end
-            elseif AutoShown and (not nearest or nearestDist > Config.AutoUnloadRange) then
-                ClearAutoDisplay()
-            end
-        end
-    end
 end)
 
 -- ── Visible-set builder ───────────────────────────────────────────────────────
