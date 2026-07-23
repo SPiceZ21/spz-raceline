@@ -90,9 +90,48 @@ end
 
 -- ── Replay ────────────────────────────────────────────────────────────────────
 
+-- ── Ghost modes ───────────────────────────────────────────────────────────────
+--   "pb"     — your own best lap (default)
+--   "record" — the track record holder's actual lap (the server ghost)
+--   "pace"   — your PB line replayed at your session-average pace: beatable
+--              every lap, so there is always a target you can realistically catch
+GhostMode = GhostMode or "pb"
+
+local MODE_TINT = {
+    pb     = nil,                  -- keep the car's own colours
+    record = { 255, 215, 0 },      -- gold: the one to beat
+    pace   = { 0, 170, 255 },      -- blue: the trainer
+}
+
+local function ResolveEntry()
+    if GhostMode == "record" then
+        local rec = RL_GetRecordEntry and RL_GetRecordEntry(TTTrack)
+        return rec   -- nil on first call: fetch is async, hook retries below
+    end
+
+    local entry = RL_GetEntry and RL_GetEntry(TTTrack)
+    if not entry then return nil end
+
+    if GhostMode == "pace" then
+        -- Rescale the PB timing to the session-average lap. Falls back to PB
+        -- pace until at least one lap has been banked this session.
+        local avg = RL_GetSessionAverage and RL_GetSessionAverage(TTTrack)
+        if avg and entry.best and entry.best > 0 and avg > entry.best then
+            local f, pts = avg / entry.best, {}
+            for i, p in ipairs(entry.points) do
+                pts[i] = { x = p.x, y = p.y, z = p.z, s = p.s, brk = p.brk,
+                           t = p.t and math.floor(p.t * f) or nil }
+            end
+            return { points = pts, best = avg, model = entry.model }
+        end
+    end
+
+    return entry
+end
+
 local function StartRun()
     if not GhostOn or not TTTrack then return end
-    local entry = RL_GetEntry and RL_GetEntry(TTTrack)
+    local entry = ResolveEntry()
     if not entry then return end
 
     Route = BuildRoute(entry)
@@ -109,10 +148,24 @@ local function StartRun()
     end
 
     SetEntityVisible(GhostVeh, true, false)
+
+    -- Mode tint so you always know WHICH ghost you're racing
+    local tint = MODE_TINT[GhostMode]
+    if tint then
+        SetVehicleCustomPrimaryColour(GhostVeh, tint[1], tint[2], tint[3])
+        SetVehicleCustomSecondaryColour(GhostVeh, tint[1], tint[2], tint[3])
+    end
+
     CurHeading = heading
     Cursor     = 1
     RunStart   = GetGameTimer()
     Running    = true
+end
+
+-- Record line arrived from the server mid-session: if we're waiting on it and
+-- a lap is underway, nothing to do — the next LapStarted picks it up.
+function RL_OnRecordEntry(track)
+    -- no-op hook; kept so main.lua can notify without a hard dependency
 end
 
 local function LerpAngle(a, b, f)
@@ -201,4 +254,17 @@ function RL_GhostToggle()
     GhostOn = not GhostOn
     if not GhostOn then DeleteGhost() end
     return GhostOn
+end
+
+-- Cycle/set the ghost mode. Deletes the current ghost so the next lap spawns
+-- the right line, model and tint.
+function RL_GhostSetMode(mode)
+    if mode ~= "pb" and mode ~= "record" and mode ~= "pace" then return nil end
+    GhostMode = mode
+    GhostOn   = true
+    DeleteGhost()
+    if mode == "record" and TTTrack and RL_GetRecordEntry then
+        RL_GetRecordEntry(TTTrack)   -- kick off the async fetch now
+    end
+    return GhostMode
 end

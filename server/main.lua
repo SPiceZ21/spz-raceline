@@ -140,6 +140,60 @@ end)
 
 -- ── Cleanup ───────────────────────────────────────────────────────────────────
 
+-- ── Track record lines (async ghost racing) ──────────────────────────────────
+-- The fastest stored line for a track, ANY player — the server ghost everyone
+-- races against. Cached briefly: leaderboards and TT menus hammer this.
+
+local RecordCache = {}   -- track -> { at = ms, best, holder, points }
+local RECORD_TTL  = 60000
+
+local function GetRecordRow(track)
+    local hit = RecordCache[track]
+    if hit and (GetGameTimer() - hit.at) < RECORD_TTL then return hit end
+
+    local rows = MySQL.query.await([[
+        SELECT r.points, r.best_ms, p.username
+        FROM racelines r
+        JOIN players p ON p.id = r.player_id
+        WHERE r.track = ?
+        ORDER BY r.best_ms ASC
+        LIMIT 1
+    ]], { track })
+
+    local row = rows and rows[1]
+    local entry
+    if row then
+        local ok, decoded = pcall(json.decode, row.points)
+        entry = {
+            at     = GetGameTimer(),
+            best   = row.best_ms,
+            holder = row.username or "Unknown",
+            points = ok and decoded or nil,
+        }
+    else
+        entry = { at = GetGameTimer() }   -- negative-cache empty tracks too
+    end
+    RecordCache[track] = entry
+    return entry
+end
+
+RegisterNetEvent("spz-raceline:getRecordLine", function(track)
+    local src = source
+    if type(track) ~= "string" then return end
+
+    local rec = GetRecordRow(track)
+    if not rec.points then return end
+
+    TriggerClientEvent("spz-raceline:recordLine", src, track, rec.points, rec.best, rec.holder)
+end)
+
+-- Summary only (no line payload) — for menus/leaderboards
+exports("GetRecordSummary", function(track)
+    local rec = GetRecordRow(track)
+    if not rec.best then return nil end
+    return { best = rec.best, holder = rec.holder }
+end)
+
 AddEventHandler("playerDropped", function()
     Pending[source] = nil
 end)

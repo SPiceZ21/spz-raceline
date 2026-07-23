@@ -42,3 +42,14 @@ Config.Ghost = {
     fallbackModel = `sultan`,  -- used when the line predates model capture (v1)
     headingLerp   = 10.0,      -- yaw smoothing factor (higher = snappier)
 }
+
+-- Telemetry coaching overlay (/raceline coach). Paints the road red where you
+-- lost time vs your reference lap, with "-Xs" markers at the worst spots.
+Config.Coach = {
+    enabled     = true,
+    minLossMs   = 40,          -- ignore losses smaller than this (noise floor)
+    markerCount = 4,           -- how many "hot" loss markers to flag
+    drawRange   = 220.0,       -- metres
+    width       = 0.5,         -- ribbon width
+    zLift       = 0.06,        -- lift above road to avoid z-fighting
+}

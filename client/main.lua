@@ -282,6 +282,24 @@ end)
 -- no samples are dropped at the seam.
 RegisterNetEvent("SPZ:tt:LapComplete", function()
     if not TTTrack then return end
+
+    -- Coaching: compare the lap just driven against the reference BEFORE
+    -- FreezeLap clears Cap. Reference = record line if the record ghost is on,
+    -- otherwise the personal best.
+    if RL_CoachAnalyse and exports[GetCurrentResourceName()]:IsCoachOn()
+       and Cap and #Cap > 3 then
+        local ref
+        if GhostMode == "record" and RL_GetRecordEntry then
+            local rec = RL_GetRecordEntry(TTTrack)
+            ref = rec and rec.points
+        end
+        if not ref then
+            local pb = RL_GetEntry and RL_GetEntry(TTTrack)
+            ref = pb and pb.points
+        end
+        if ref then RL_CoachAnalyse(Cap, ref) end
+    end
+
     FreezeLap()          -- moves Cap -> LastLap and clears Cap
 end)
 
@@ -313,6 +331,7 @@ RegisterNetEvent("SPZ:tt:End", function()
     StopCapture()
     TTTrack, TTType = nil, nil
     ClearAutoDisplay()
+    if RL_CoachClear then RL_CoachClear() end
 end)
 
 -- ── Race hooks ────────────────────────────────────────────────────────────────
@@ -526,10 +545,25 @@ RegisterCommand("raceline", function(_, args)
     elseif sub == "hide" then
         SetVisible(false)
     elseif sub == "ghost" then
-        local on = RL_GhostToggle and RL_GhostToggle()
-        Notify(on and "Raceline: ghost car ~g~ON~s~" or "Raceline: ghost car ~r~OFF~s~")
+        local mode = (args[2] or ""):lower()
+        if mode == "pb" or mode == "record" or mode == "pace" then
+            RL_GhostSetMode(mode)
+            local labels = {
+                pb     = "ghost: ~g~YOUR BEST~s~",
+                record = "ghost: ~y~TRACK RECORD~s~ (gold car)",
+                pace   = "ghost: ~b~SESSION PACE~s~ (blue car — beatable)",
+            }
+            Notify("Raceline " .. labels[mode])
+        else
+            local on = RL_GhostToggle and RL_GhostToggle()
+            Notify(on and "Raceline: ghost car ~g~ON~s~" or "Raceline: ghost car ~r~OFF~s~")
+        end
+    elseif sub == "coach" then
+        local on = RL_CoachToggle and RL_CoachToggle()
+        Notify(on and "Raceline: coach overlay ~g~ON~s~ — finish a lap to see where you lose time"
+                   or "Raceline: coach overlay ~r~OFF~s~")
     else
-        Notify("Usage: /raceline show | hide | ghost")
+        Notify("Usage: /raceline show | hide | ghost [pb|record|pace] | coach")
     end
 end, false)
 
@@ -566,7 +600,47 @@ exports("LoadLine", function(pts)
     return Count > 0
 end)
 
--- ── Ghost accessor (same-resource global, read by client/ghost.lua) ──────────
+-- ── Ghost accessors (same-resource globals, read by ghost.lua / coach.lua) ───
 function RL_GetEntry(track)
     return LineCache[track]
+end
+
+-- Track-record lines (any player's fastest), fetched on demand from the server
+local RecordCache = {}   -- track -> { points, best, model, holder }
+
+RegisterNetEvent("spz-raceline:recordLine", function(track, data, bestMs, holder)
+    if type(data) ~= "table" then return end
+    local pts, model = ExpandLine(data)
+    RecordCache[track] = { points = pts, best = bestMs, model = model, holder = holder }
+    if RL_OnRecordEntry then RL_OnRecordEntry(track) end   -- ghost.lua hook
+end)
+
+function RL_GetRecordEntry(track)
+    if not RecordCache[track] then
+        TriggerServerEvent("spz-raceline:getRecordLine", track)   -- async fill
+        return nil
+    end
+    return RecordCache[track]
+end
+
+-- Session lap times per track (feeds the "pace" rubber-band ghost)
+local SessionLaps = {}   -- track -> { ms, ms, ... }
+
+RegisterNetEvent("SPZ:tt:LapComplete", function(data)
+    if not TTTrack or not data or not data.lapTime then return end
+    local t = SessionLaps[TTTrack] or {}
+    t[#t + 1] = data.lapTime
+    SessionLaps[TTTrack] = t
+end)
+
+function RL_GetSessionAverage(track)
+    local t = SessionLaps[track]
+    if not t or #t == 0 then return nil end
+    local sum = 0
+    for _, ms in ipairs(t) do sum = sum + ms end
+    return math.floor(sum / #t)
+end
+
+function RL_GetLastLap()
+    return LastLap, LastLapModel
 end

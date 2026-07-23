@@ -12,6 +12,7 @@ shared_script 'config.lua'
 client_scripts {
   'client/main.lua',
   'client/ghost.lua',
+  'client/coach.lua',
 }
 
 server_scripts {
