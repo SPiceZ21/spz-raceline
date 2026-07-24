@@ -12,7 +12,7 @@ Config.BrakeDeadzone    = 0.15
 
 Config.DrawDistance    = 140.0   -- only segments this close to the player render
 Config.LineWidth       = 0.35    -- ribbon width in metres
-Config.HeightOffset    = 0.04    -- hug the road (higher lifts poke through the car)
+Config.HeightOffset    = 0.08    -- lift above the road to avoid z-fighting
 Config.RebuildMs       = 400     -- how often the visible segment set refreshes
 Config.MaxDrawSegments = 300     -- hard cap on quads per frame
 

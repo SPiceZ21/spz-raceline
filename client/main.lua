@@ -474,13 +474,6 @@ CreateThread(function()
             local veh   = GetVehiclePedIsIn(ped, false)
             local ppos  = (veh ~= 0 and DoesEntityExist(veh)) and GetEntityCoords(veh) or GetEntityCoords(ped)
             local maxSq = Config.DrawDistance ^ 2
-            local minSq = 0.0
-            if veh ~= 0 and DoesEntityExist(veh) then
-                local min, max = GetModelDimensions(GetEntityModel(veh))
-                local r = math.max(math.abs(min.x), math.abs(max.x), math.abs(min.y), math.abs(max.y)) + 0.4
-                minSq = r * r
-            end
-
             local half  = Config.LineWidth * 0.5
             local out, n = {}, 0
 
@@ -491,7 +484,7 @@ CreateThread(function()
                     local mx = (prev.x + pt.x) * 0.5 - ppos.x
                     local my = (prev.y + pt.y) * 0.5 - ppos.y
                     local distSq = mx * mx + my * my
-                    if distSq <= maxSq and distSq >= minSq then
+                    if distSq <= maxSq then
                         local dx, dy = pt.x - prev.x, pt.y - prev.y
                         local len = math.sqrt(dx * dx + dy * dy)
                         if len > 0.01 then
@@ -523,39 +516,17 @@ end)
 CreateThread(function()
     while true do
         if Visible and #Quads > 0 then
-            -- DrawPoly has no depth-occlusion against the player's own car, so
-            -- ribbon segments sitting under/near the car draw OVER it (the
-            -- "green column through the car"). The rebuild-thread cull is only
-            -- refreshed every RebuildMs and lags a moving car, so cull again
-            -- here every frame against the LIVE car position + a clear radius.
-            local ped   = PlayerPedId()
-            local veh   = GetVehiclePedIsIn(ped, false)
-            local cx, cy, near2 = 0.0, 0.0, -1.0
-            if veh ~= 0 and DoesEntityExist(veh) then
-                local p = GetEntityCoords(veh)
-                cx, cy = p.x, p.y
-                local mn, mx = GetModelDimensions(GetEntityModel(veh))
-                -- half-length + generous margin so the whole car body is clear
-                local r = math.max(math.abs(mn.y), math.abs(mx.y)) + 2.5
-                near2 = r * r
-            end
-
+            -- No near-car cull: the car occludes the ribbon on its own now that
+            -- entity alpha is no longer overridden (an explicit SetEntityAlpha
+            -- pushed vehicles into the transparent pass, killing depth-write —
+            -- that was what made the line paint over the bodywork).
             for i = 1, #Quads do
-                local q = Quads[i]
-                local skip = false
-                if near2 > 0 then
-                    local mxs = (q.ax1 + q.bx1) * 0.5 - cx
-                    local mys = (q.ay1 + q.by1) * 0.5 - cy
-                    if mxs * mxs + mys * mys < near2 then skip = true end
-                end
-                if not skip then
-                    local c = q.c
-                    -- one-sided poly → draw both windings for either camera side
-                    DrawPoly(q.ax1, q.ay1, q.az, q.ax2, q.ay2, q.az, q.bx1, q.by1, q.bz, c.r, c.g, c.b, c.a)
-                    DrawPoly(q.bx1, q.by1, q.bz, q.ax2, q.ay2, q.az, q.ax1, q.ay1, q.az, c.r, c.g, c.b, c.a)
-                    DrawPoly(q.ax2, q.ay2, q.az, q.bx2, q.by2, q.bz, q.bx1, q.by1, q.bz, c.r, c.g, c.b, c.a)
-                    DrawPoly(q.bx1, q.by1, q.bz, q.bx2, q.by2, q.bz, q.ax2, q.ay2, q.az, c.r, c.g, c.b, c.a)
-                end
+                local q, c = Quads[i], Quads[i].c
+                -- one-sided poly → draw both windings for either camera side
+                DrawPoly(q.ax1, q.ay1, q.az, q.ax2, q.ay2, q.az, q.bx1, q.by1, q.bz, c.r, c.g, c.b, c.a)
+                DrawPoly(q.bx1, q.by1, q.bz, q.ax2, q.ay2, q.az, q.ax1, q.ay1, q.az, c.r, c.g, c.b, c.a)
+                DrawPoly(q.ax2, q.ay2, q.az, q.bx2, q.by2, q.bz, q.bx1, q.by1, q.bz, c.r, c.g, c.b, c.a)
+                DrawPoly(q.bx1, q.by1, q.bz, q.bx2, q.by2, q.bz, q.ax2, q.ay2, q.az, c.r, c.g, c.b, c.a)
             end
             Wait(0)
         else

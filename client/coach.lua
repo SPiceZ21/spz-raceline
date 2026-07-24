@@ -155,22 +155,12 @@ CreateThread(function()
             local half = SEG_WIDTH * 0.5
             local maxSq = DRAW_RANGE * DRAW_RANGE
 
-            -- Near-car cull: DrawPoly doesn't occlude against your own car, so
-            -- segments under it draw over the bodywork. Skip anything within
-            -- the car footprint + margin (live position, every frame).
-            local veh = GetVehiclePedIsIn(ped, false)
-            local near2 = -1.0
-            if veh ~= 0 and DoesEntityExist(veh) then
-                local mn, mx = GetModelDimensions(GetEntityModel(veh))
-                local r = math.max(math.abs(mn.y), math.abs(mx.y)) + 2.5
-                near2 = r * r
-            end
-
+            -- No near-car cull needed: the car occludes these polys naturally
+            -- now that entity alpha is left alone (see spz-core/client/ghost.lua).
             for i = 1, #Segments do
                 local s = Segments[i]
                 local mx, my = (s.ax+s.bx)*0.5 - p.x, (s.ay+s.by)*0.5 - p.y
-                local d2 = mx*mx + my*my
-                if d2 <= maxSq and (near2 < 0 or d2 >= near2) then drawSeg(s, half, p.x, p.y) end
+                if mx*mx + my*my <= maxSq then drawSeg(s, half, p.x, p.y) end
             end
 
             for i = 1, #Markers do
