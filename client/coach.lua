@@ -11,7 +11,9 @@
 --   { x, y, z, s (0 coast/1 throttle/2 brake), brk, t (ms since lap start) }
 
 local CC = (Config.Coach) or {}
-local CoachOn = CC.enabled ~= false
+-- Off by default — opt in with /raceline coach. Set Config.Coach.enabled=true
+-- only if you want it auto-on.
+local CoachOn = CC.enabled == true
 
 local Segments = {}   -- { { x, y, z, loss (ms), colour }, ... }
 local Markers  = {}   -- worst spots: { x, y, z, loss, hint }
