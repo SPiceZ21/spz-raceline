@@ -59,12 +59,34 @@ end
 
 -- ── Ghost entity ──────────────────────────────────────────────────────────────
 
+local GhostBlip = 0
+
+local function RemoveGhostBlip()
+    if GhostBlip ~= 0 and DoesBlipExist(GhostBlip) then RemoveBlip(GhostBlip) end
+    GhostBlip = 0
+end
+
 local function DeleteGhost()
     Running = false
+    RemoveGhostBlip()
     if GhostVeh ~= 0 and DoesEntityExist(GhostVeh) then
         DeleteEntity(GhostVeh)
     end
     GhostVeh = 0
+end
+
+-- Map blip attached to the ghost car (purple, matches its "reference" role).
+local function AddGhostBlip()
+    if GhostVeh == 0 or not DoesEntityExist(GhostVeh) then return end
+    RemoveGhostBlip()
+    GhostBlip = AddBlipForEntity(GhostVeh)
+    SetBlipSprite(GhostBlip, 1)
+    SetBlipColour(GhostBlip, 27)      -- purple/violet
+    SetBlipScale(GhostBlip, 0.8)
+    SetBlipAsShortRange(GhostBlip, false)
+    BeginTextCommandSetBlipName("STRING")
+    AddTextComponentSubstringPlayerName("Ghost")
+    EndTextCommandSetBlipName(GhostBlip)
 end
 
 local function SpawnGhost(model, at, heading)
@@ -160,6 +182,7 @@ local function StartRun()
     Cursor     = 1
     RunStart   = GetGameTimer()
     Running    = true
+    AddGhostBlip()
 end
 
 -- Record line arrived from the server mid-session: if we're waiting on it and
@@ -188,6 +211,7 @@ CreateThread(function()
             if elapsed >= times[n] then
                 -- Ghost lap done: hide and wait for the player's next lap
                 SetEntityVisible(GhostVeh, false, false)
+                RemoveGhostBlip()
                 Running = false
             else
                 local a, b   = pts[Cursor], pts[Cursor + 1]
@@ -235,6 +259,7 @@ RegisterNetEvent("SPZ:tt:LapStarted", function()
 end)
 
 RegisterNetEvent("SPZ:tt:Restarted", function()
+    RemoveGhostBlip()
     if GhostVeh ~= 0 then SetEntityVisible(GhostVeh, false, false) end
     Running = false
 end)
