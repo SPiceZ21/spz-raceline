@@ -82,6 +82,14 @@ RegisterNetEvent("spz-raceline:submitCapture", function(track, payload)
     -- Normalise to v3 for storage (splits may be empty table for v2 upgrades)
     local stored = { v = 3, m = payload.m, p = flat, c = splits or {} }
 
+    -- Who holds this track's record BEFORE the write — to detect a steal.
+    local prevRows = MySQL.query.await([[
+        SELECT r.player_id, r.best_ms, pl.username
+        FROM racelines r JOIN players pl ON pl.id = r.player_id
+        WHERE r.track = ? ORDER BY r.best_ms ASC LIMIT 1
+    ]], { track })
+    local prev = prevRows and prevRows[1]
+
     MySQL.query.await([[
         INSERT INTO racelines (player_id, track, best_ms, anchor_x, anchor_y, anchor_z, points)
         VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -95,6 +103,21 @@ RegisterNetEvent("spz-raceline:submitCapture", function(track, payload)
           json.encode(stored) })
 
     TriggerClientEvent("spz-raceline:saved", src, track, p.ms, { x = flat[1], y = flat[2], z = flat[3] })
+
+    -- New TRACK record (fastest line for this track, any player)? crown.lua
+    -- broadcasts the steal and refreshes crown statebags; this file clears its
+    -- ghost-record cache (handler near RecordCache below).
+    if not prev or p.ms < prev.best_ms then
+        local newName = MySQL.scalar.await(
+            "SELECT username FROM players WHERE id = ? LIMIT 1", { p.pid }) or "Driver"
+        TriggerEvent("spz-raceline:recordTaken", {
+            track   = track,
+            newPid  = p.pid, newName = newName, newMs = p.ms, newSrc = src,
+            oldPid  = prev and prev.player_id or nil,
+            oldName = prev and prev.username or nil,
+            oldMs   = prev and prev.best_ms or nil,
+        })
+    end
 end)
 
 -- ── Anchor list (for client proximity auto-loading) ──────────────────────────
@@ -192,6 +215,12 @@ exports("GetRecordSummary", function(track)
     local rec = GetRecordRow(track)
     if not rec.best then return nil end
     return { best = rec.best, holder = rec.holder }
+end)
+
+-- A new track record just landed: drop the cached ghost-record row so the next
+-- fetch reflects the new holder immediately.
+AddEventHandler("spz-raceline:recordTaken", function(info)
+    if info and info.track then RecordCache[info.track] = nil end
 end)
 
 AddEventHandler("playerDropped", function()
