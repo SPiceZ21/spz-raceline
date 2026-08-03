@@ -47,3 +47,16 @@ RegisterNetEvent("SPZ:recordStolen", function(d)
         icon        = "crown",
     })
 end)
+
+-- Track ownership tax payout.
+RegisterNetEvent("SPZ:trackTax", function(d)
+    if not d or not d.credits then return end
+    lib.notify({
+        title       = "TRACK OWNERSHIP",
+        description  = ("+%d credits — %d record%s held")
+            :format(d.credits, d.tracks or 1, (d.tracks or 1) == 1 and "" or "s"),
+        type        = "success",
+        position    = "top",
+        icon        = "coins",
+    })
+end)

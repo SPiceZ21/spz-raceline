@@ -20,6 +20,8 @@ server_scripts {
   '@oxmysql/lib/MySQL.lua',
   'server/main.lua',
   'server/crown.lua',
+  'server/tax.lua',
+  'server/botlines.lua',
 }
 
 dependencies {

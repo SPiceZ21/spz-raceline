@@ -43,6 +43,16 @@ Config.Ghost = {
     headingLerp   = 10.0,      -- yaw smoothing factor (higher = snappier)
 }
 
+-- ── Track ownership tax ───────────────────────────────────────────────────────
+-- The crown pays rent: every player currently holding at least one track record
+-- (spz:records > 0, published by crown.lua) receives a passive credit trickle,
+-- scaled by how many tracks they hold. Makes records worth defending.
+Config.Tax = {
+    enabled    = true,
+    intervalMs = 600000,   -- pay every 10 minutes
+    perTrack   = 25,       -- credits per held record, per payout
+}
+
 -- Telemetry coaching overlay (/raceline coach). Paints the road red where you
 -- lost time vs your reference lap, with "-Xs" markers at the worst spots.
 Config.Coach = {
