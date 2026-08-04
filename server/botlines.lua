@@ -4,6 +4,34 @@
 -- pace field (fastest through slower PBs), not a wall of record laps, so the
 -- bots are beatable.
 
+-- A specific player's stored line for a track (for ghost duels). Same decode as
+-- GetBotLines but keyed to one player_id.
+exports("GetLineByPlayerId", function(pid, track)
+    pid = tonumber(pid)
+    if not pid or type(track) ~= "string" then return nil end
+
+    local rows = MySQL.query.await([[
+        SELECT r.points, r.best_ms, pl.username
+        FROM racelines r JOIN players pl ON pl.id = r.player_id
+        WHERE r.player_id = ? AND r.track = ? LIMIT 1
+    ]], { pid, track })
+
+    local row = rows and rows[1]
+    if not row then return nil end
+
+    local ok, stored = pcall(json.decode, row.points)
+    if not ok or type(stored) ~= "table" or type(stored.p) ~= "table" or #stored.p < 10 then
+        return nil
+    end
+    return {
+        name   = row.username or "Ghost",
+        ms     = row.best_ms,
+        model  = stored.m,
+        points = stored.p,
+        splits = stored.c or {},
+    }
+end)
+
 exports("GetBotLines", function(track, count)
     if type(track) ~= "string" or type(count) ~= "number" or count <= 0 then
         return {}
