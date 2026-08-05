@@ -7,7 +7,10 @@ version '0.4.0'
 author 'SPiceZ-Core'
 lua54 'yes'
 
-shared_script 'config.lua'
+shared_scripts {
+  '@ox_lib/init.lua',
+  'config.lua',
+}
 
 client_scripts {
   'client/main.lua',
@@ -26,4 +29,5 @@ server_scripts {
 
 dependencies {
   'oxmysql',
+  'ox_lib',
 }
