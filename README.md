@@ -1,68 +1,92 @@
 # spz-raceline
 
-Racing-line trainer. Automatically records your driving line in **races and
-time trials** and paints your best one on the road as a flat ribbon: **green**
-where you were on throttle, **red** where you were braking, faint white where
-you coasted.
+> Racing-line trainer and time-trial ghost car · `v0.4.0`
 
-## How it behaves
+## Overview
 
-- **Fully automatic capture.** Every race lap and time-trial lap is silently
-  recorded. When a lap **beats your stored best for that track**, the driven
-  line is saved (per player, per track) — slower laps never overwrite it.
-  Times are server-measured (from `spz-races`); the client only supplies
-  points, never times.
-- **Closed loops.** Circuit captures run through the final-checkpoint → start-line
-  stretch, and any residual seam is bridged with interpolated points at
-  display time (`Config.LoopCloseRange`), so the ribbon reads as one
-  continuous lap.
-- **Ghost while practising.** Entering a time trial shows your stored best
-  line; beating it swaps the ghost immediately.
-- **Auto-detect.** Drive near any track where you have a stored line
-  (`Config.AutoLoadRange`, default 150 m from the line's start) and it loads
-  and displays automatically; it hides again when you leave.
+`spz-raceline` records your driving line in races and time trials and paints your best one
+on the road as a flat ribbon: **green** on throttle, **red** braking, faint white
+coasting. In time trials it also replays that lap as a translucent ghost car.
 
-## Ghost car
+## Behaviour
 
-In time trials your stored best lap replays as a **translucent ghost car** —
-your own vehicle model, brake lights lighting up where you braked. It launches
-in sync with each lap start (CP1 crossing), fades out when its lap is done,
-and swaps to the new line the moment you set a faster one. Lines recorded from
-v0.4 onward carry per-point timing so the ghost accelerates and brakes exactly
-where you did; older lines replay at distance-proportional pace.
+- **Automatic capture** — every race and time-trial lap is recorded silently. A lap is
+  stored (per player, per track) only when it beats your stored best; slower laps never
+  overwrite. Times are server-measured by `spz-races`; the client supplies points only.
+- **Closed loops** — circuit captures run through the final-checkpoint → start-line
+  stretch, and any residual seam is bridged with interpolated points at display time
+  (`Config.LoopCloseRange`).
+- **Auto-detect** — drive within `Config.AutoLoadRange` (default 150 m) of a track where
+  you have a stored line and it loads and displays itself, hiding again when you leave.
+- **Record crowns** — whoever holds a track's fastest line wears a gold crown on their
+  nametag, rendered by `spz-nametag` from the `spz:records` statebag. Taking a record
+  broadcasts to everyone and logs to Discord; crown counts refresh live for both the new
+  and the dethroned holder.
+- **Ghost car** — in time trials your best lap replays as your own vehicle model, brake
+  lights lighting where you braked, launched in sync with each lap start (CP1 crossing).
+  Lines recorded from v0.4 carry per-point timing so the ghost accelerates and brakes
+  exactly where you did; older lines replay at distance-proportional pace.
+
+## How it works
+
+- Samples position + pedal state every `Config.SampleDistance` metres driven. Brake input
+  beats throttle, so trail-braking reads as braking.
+- Two buffers: the drawn display ring buffer, and a per-lap capture frozen at the lap
+  boundary and submitted only when the server confirms the lap improved.
+- Two-stage rendering: a slow thread rebuilds the nearby segment set every
+  `Config.RebuildMs`; the per-frame thread only paints it (`Config.MaxDrawSegments` cap).
+- Storage: the `racelines` table, owned by `spz-core/migrations/006_racelines.sql`. Lines
+  are a flat JSON array of `x, y, z, state` quadruples; the first point doubles as the
+  proximity anchor.
+
+## Structure
+
+| Side | File | Purpose |
+|---|---|---|
+| Shared | `config.lua` | Sampling, ranges, draw caps |
+| Client | `client/main.lua` | Capture, storage bridge, rendering |
+| Client | `client/ghost.lua` | Ghost car replay |
+| Client | `client/coach.lua` | Coaching cues |
+| Client | `client/crown.lua` | Track-crown display |
+| Server | `server/main.lua` | Line persistence and best-lap gating |
+| Server | `server/crown.lua` | Track crown ownership |
+| Server | `server/tax.lua` | Crown tax rules |
+| Server | `server/botlines.lua` | Bot reference lines |
 
 ## Commands
 
 | Command | Effect |
 |---|---|
-| `/raceline show` | Show the line |
-| `/raceline hide` | Hide the line |
-| `/raceline ghost` | Toggle the time-trial ghost car |
+| `/raceline show` · `/raceline hide` | Show or hide the line |
+| `/raceline ghost` | Toggle the ghost car |
+| `/raceline ghost pb` | Ghost your own best lap (default) |
+| `/raceline ghost record` | Ghost the track record holder — gold car, fetched server-side |
+| `/raceline ghost pace` | Ghost your session average — blue car, always catchable |
+| `/raceline coach` | Toggle the coaching overlay (off by default) |
 
 `Raceline: Toggle Display` is also bindable in Settings → Key Bindings.
 
-## How it works
+The coaching overlay paints the road red where you lost time against your reference lap,
+with `-Xs` markers at the worst spots.
 
-- Samples position + pedal state every `Config.SampleDistance` metres driven.
-  Brake input wins over throttle, so trail-braking reads as braking.
-- Two buffers: the display ring buffer (drawn), and a per-lap capture that is
-  frozen at the lap boundary and submitted only when the server confirms the
-  lap improved.
-- Rendering is two-stage: a slow thread rebuilds the set of nearby segments
-  every `Config.RebuildMs`, the per-frame thread only paints that set
-  (`Config.MaxDrawSegments` cap).
-- Storage: `racelines` table, owned by `spz-core/migrations/006_racelines.sql`.
-  Lines are stored as a flat JSON array of `x, y, z, state` quadruples; the
-  first point doubles as the proximity anchor.
+## Exports
 
-## Exports (client)
-
-`SetLineVisible(bool)`, `IsLineVisible()`, `ClearLine()`,
-`GetLine()` → ordered point array, `LoadLine(points)` → replace the display.
+| Export | Description |
+|---|---|
+| `SetLineVisible(bool)` · `IsLineVisible()` | Display toggle |
+| `GetLine()` · `LoadLine(points)` · `ClearLine()` | Read or replace the displayed line |
+| `GetLineByPlayerId(id)` | Fetch another player's stored line |
+| `GetBotLines()` | Reference lines for bots |
+| `GetRecordSummary()` | Track record summary |
+| `IsCoachOn()` | Coaching state |
+| `PublishCrown()` | Publish track crown ownership |
 
 Point format: `{ x, y, z, s, brk }` where `s` = 0 coast / 1 throttle / 2 brake.
 
 ## Dependencies
 
-- `oxmysql` (persistence)
-- Soft: `spz-identity` (player id), `spz-races` (lap events)
+`oxmysql` · `ox_lib`. Soft: `spz-identity` (player id), `spz-races` (lap events).
+
+---
+
+Part of [SPiceZ-Core](../README.md) · GPL-3.0
