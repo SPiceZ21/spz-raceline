@@ -211,6 +211,8 @@ CreateThread(function()
             if elapsed >= times[n] then
                 -- Ghost lap done: hide and wait for the player's next lap
                 SetEntityVisible(GhostVeh, false, false)
+                FreezeEntityPosition(GhostVeh, true)
+                SetEntityVelocity(GhostVeh, 0.0, 0.0, 0.0)
                 RemoveGhostBlip()
                 Running = false
             else
@@ -225,6 +227,17 @@ CreateThread(function()
 
                 local target = math.deg(math.atan(-(b.x - a.x), b.y - a.y)) % 360
                 CurHeading = LerpAngle(CurHeading, target, (GC.headingLerp or 10.0) * GetFrameTime())
+
+                -- Feed the ghost its real segment velocity so the WHEELS SPIN.
+                -- Frozen + teleported cars have zero road speed → static wheels.
+                -- We unfreeze, apply velocity (drives wheel rotation), then pin the
+                -- exact path position on top so it can't drift. Clamp per-axis so a
+                -- lag spike (tiny span) can't fling a huge one-frame velocity.
+                local inv = span > 0 and (1000.0 / span) or 0.0   -- ms → per-second
+                local function clampv(v) return math.max(-120.0, math.min(120.0, v)) end
+                FreezeEntityPosition(GhostVeh, false)
+                SetEntityVelocity(GhostVeh,
+                    clampv((b.x - a.x) * inv), clampv((b.y - a.y) * inv), clampv((b.z - a.z) * inv))
 
                 SetEntityCoordsNoOffset(GhostVeh, x, y, z, false, false, false)
                 SetEntityHeading(GhostVeh, CurHeading)
