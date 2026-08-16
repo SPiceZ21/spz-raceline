@@ -101,18 +101,32 @@ local function FlattenLine(pts, splits)
         flat[n + 5] = math.floor(p.t or 0)
     end
     -- LastLapModel first: FlattenLine always serialises the FROZEN lap
-    return {
+    local out = {
         v = 3,
         m = LastLapModel or CapModel or 0,
         p = flat,
         c = splits or {},
     }
+
+    -- v4 adds `r`: the fixed-rate motion stream (position + full orientation +
+    -- steer/rpm) the ghost replays. `p` is untouched, so anything that only
+    -- knows v3 — the painted ribbon, the coach — keeps reading it as before.
+    if Config.MotionCapture ~= false then
+        local motion = RL_MotFlatten()
+        if motion then
+            out.v = 4
+            out.r = motion
+        end
+    end
+
+    return out
 end
 
 local function ExpandLine(data)
     local pts = {}
 
-    if type(data) == "table" and (data.v == 2 or data.v == 3) and type(data.p) == "table" then
+    if type(data) == "table" and (data.v == 2 or data.v == 3 or data.v == 4)
+       and type(data.p) == "table" then
         local flat = data.p
         for i = 1, #flat, 5 do
             local s = flat[i + 3] or 0
@@ -122,7 +136,9 @@ local function ExpandLine(data)
             }
         end
         -- v2 has no splits; the ghost then runs unanchored (previous behaviour)
-        return pts, data.m, (data.v == 3) and data.c or nil
+        local splits = (data.v >= 3) and data.c or nil
+        local motion = (data.v >= 4) and RL_MotExpand(data.r) or nil
+        return pts, data.m, splits, motion
     end
 
     -- v1: flat quadruples, no timing, no model, no splits
@@ -211,7 +227,8 @@ end
 CreateThread(function()
     local lastX, lastY
     while true do
-        Wait(Capturing and 50 or 400)
+        -- 40 ms while capturing = 25 Hz motion sampling (see client/motion.lua).
+        Wait(Capturing and (Config.MotionIntervalMs or 40) or 400)
 
         if Capturing then
             local ped = PlayerPedId()
@@ -222,6 +239,15 @@ CreateThread(function()
                 local dx = pos.x - (lastX or pos.x)
                 local dy = pos.y - (lastY or pos.y)
 
+                local pedal = PedalState()
+
+                -- Fixed-rate motion stream for the ghost — every tick, regardless
+                -- of the distance gate below (which only feeds the painted line).
+                if Config.MotionCapture ~= false then
+                    RL_MotSample(veh, GetGameTimer() - CapStart, pedal == 2,
+                        GetVehicleHandbrake(veh))
+                end
+
                 if lastX == nil or (dx * dx + dy * dy) >= Config.SampleDistance ^ 2 then
                     -- Teleport / respawn: don't draw a line across the map
                     local jump = lastX ~= nil and (dx * dx + dy * dy) > Config.BreakDistance ^ 2
@@ -229,7 +255,7 @@ CreateThread(function()
                         if #Cap == 0 then CapModel = GetEntityModel(veh) end
                         Cap[#Cap + 1] = {
                             x = pos.x, y = pos.y, z = GroundedZ(pos),
-                            s = PedalState(), brk = (#Cap == 0) or jump,
+                            s = pedal, brk = (#Cap == 0) or jump,
                             t = GetGameTimer() - CapStart,   -- ghost pacing
                         }
                     end
@@ -247,18 +273,23 @@ local function FreezeLap()
     LastLap, LastLapReady = Cap, true
     LastLapModel  = CapModel
     LastLapSplits = CapSplits
+    RL_MotFreeze()               -- motion stream freezes with the lap
     Cap       = {}
     CapSplits = {}
     CapStart  = GetGameTimer()   -- races: next lap's capture starts immediately
-    -- A deferred submit (circuit TT waiting for the loop to close) fires now
+    -- A deferred submit (circuit TT waiting for the loop to close) fires now.
+    -- LATENT: the v4 motion stream is far larger than the old line and would be
+    -- dropped by a plain reliable event.
     if SubmitTrack and #LastLap > 1 then
-        TriggerServerEvent("spz-raceline:submitCapture", SubmitTrack, FlattenLine(LastLap, LastLapSplits))
+        TriggerLatentServerEvent("spz-raceline:submitCapture", 200000,
+            SubmitTrack, FlattenLine(LastLap, LastLapSplits))
         SubmitTrack = nil
     end
 end
 
 local function StopCapture()
     Capturing, Cap, CapSplits, SubmitTrack = false, {}, {}, nil
+    RL_MotReset()
 end
 
 -- ── Time-trial hooks (events already broadcast by spz-races) ─────────────────
@@ -307,6 +338,7 @@ RegisterNetEvent("SPZ:tt:LapStarted", function()
     if not TTTrack then return end
     Cap       = {}
     CapSplits = {}
+    RL_MotReset()
     Capturing = true
     CapStart  = GetGameTimer()   -- lap clock starts at the line crossing
 end)
@@ -355,6 +387,7 @@ end)
 RegisterNetEvent("SPZ:go", function()
     InRace, HadLapEvent = true, false
     Cap, CapSplits, LastLapReady = {}, {}, false
+    RL_MotReset()
     Capturing = true
     CapStart  = GetGameTimer()
     if RaceTrack then
@@ -406,7 +439,8 @@ end)
 
 RegisterNetEvent("spz-raceline:requestCapture", function(track)
     if LastLapReady and #LastLap > 1 then
-        TriggerServerEvent("spz-raceline:submitCapture", track, FlattenLine(LastLap, LastLapSplits))
+        TriggerLatentServerEvent("spz-raceline:submitCapture", 200000,
+            track, FlattenLine(LastLap, LastLapSplits))
     else
         -- Circuit TT: the improved lap's loop hasn't closed yet (player is
         -- still driving final CP → start line). FreezeLap submits it then.
@@ -417,7 +451,8 @@ end)
 RegisterNetEvent("spz-raceline:saved", function(track, bestMs, anchor)
     -- The freshly driven lap is the new best line — cache it and, if we're
     -- still on that track, swap the ghost immediately.
-    LineCache[track] = { points = LastLap, best = bestMs, model = LastLapModel, splits = LastLapSplits }
+    LineCache[track] = { points = LastLap, best = bestMs, model = LastLapModel,
+                         splits = LastLapSplits, motion = RL_MotFrozen() }
     LastLap, LastLapReady, LastLapSplits = {}, false, nil
 
     local found = false
@@ -443,8 +478,9 @@ end)
 
 RegisterNetEvent("spz-raceline:line", function(track, data, bestMs)
     if type(data) ~= "table" then return end
-    local pts, model, splits = ExpandLine(data)
-    LineCache[track] = { points = pts, best = bestMs, model = model, splits = splits }
+    local pts, model, splits, motion = ExpandLine(data)
+    LineCache[track] = { points = pts, best = bestMs, model = model,
+                         splits = splits, motion = motion }
 
     if (TTTrack == track or RaceTrack == track or PendingLoad == track)
        and (TTTrack == track or RaceTrack == track) then
@@ -615,8 +651,9 @@ local RecordCache = {}   -- track -> { points, best, model, holder }
 
 RegisterNetEvent("spz-raceline:recordLine", function(track, data, bestMs, holder)
     if type(data) ~= "table" then return end
-    local pts, model = ExpandLine(data)
-    RecordCache[track] = { points = pts, best = bestMs, model = model, holder = holder }
+    local pts, model, _, motion = ExpandLine(data)
+    RecordCache[track] = { points = pts, best = bestMs, model = model,
+                           holder = holder, motion = motion }
     if RL_OnRecordEntry then RL_OnRecordEntry(track) end   -- ghost.lua hook
 end)
 

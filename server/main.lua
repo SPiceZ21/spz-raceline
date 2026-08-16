@@ -55,7 +55,9 @@ RegisterNetEvent("spz-raceline:submitCapture", function(track, payload)
     Pending[src] = nil
 
     -- v2/v3 payload: { v = 2|3, m = modelHash, p = { x, y, z, state, t, ... }, c = splits? }
-    if type(payload) ~= "table" or (payload.v ~= 2 and payload.v ~= 3) then return end
+    -- v4 adds `r`: the fixed-rate motion stream the ghost replays.
+    if type(payload) ~= "table"
+       or (payload.v ~= 2 and payload.v ~= 3 and payload.v ~= 4) then return end
     if type(payload.m) ~= "number" then return end
     local flat = payload.p
     if type(flat) ~= "table" then return end
@@ -69,9 +71,9 @@ RegisterNetEvent("spz-raceline:submitCapture", function(track, payload)
     local lastT = flat[n]
     if lastT < 0 or lastT > p.ms + 60000 then return end
 
-    -- v3 carries CP split times; validate them minimally
+    -- v3+ carries CP split times; validate them minimally
     local splits = nil
-    if payload.v == 3 and type(payload.c) == "table" then
+    if payload.v >= 3 and type(payload.c) == "table" then
         local clean = true
         for _, v in pairs(payload.c) do
             if type(v) ~= "number" or v < 0 then clean = false; break end
@@ -79,8 +81,24 @@ RegisterNetEvent("spz-raceline:submitCapture", function(track, payload)
         if clean then splits = payload.c end
     end
 
-    -- Normalise to v3 for storage (splits may be empty table for v2 upgrades)
-    local stored = { v = 3, m = payload.m, p = flat, c = splits or {} }
+    -- v4 motion stream: flat 11-tuples (t,x,y,z,qx,qy,qz,qw,steer,rpm,flags).
+    -- Rejected wholesale if malformed — the line still stores fine without it.
+    local motion = nil
+    if payload.v >= 4 and type(payload.r) == "table" then
+        local rn = #payload.r
+        local maxN = (Config.MaxMotionSamples or 7500) * 11
+        if rn >= 44 and rn % 11 == 0 and rn <= maxN then
+            local clean = true
+            for i = 1, rn do
+                if type(payload.r[i]) ~= "number" then clean = false; break end
+            end
+            if clean then motion = payload.r end
+        end
+    end
+
+    -- Normalise for storage (splits may be empty table for v2 upgrades)
+    local stored = { v = motion and 4 or 3, m = payload.m, p = flat, c = splits or {} }
+    if motion then stored.r = motion end
 
     -- Who holds this track's record BEFORE the write — to detect a steal.
     local prevRows = MySQL.query.await([[

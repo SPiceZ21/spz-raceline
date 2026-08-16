@@ -8,6 +8,14 @@ Config.BreakDistance    = 20.0   -- a jump bigger than this (teleport/respawn) s
 Config.ThrottleDeadzone = 0.15   -- pedal input below this counts as coasting
 Config.BrakeDeadzone    = 0.15
 
+-- ── Motion capture (realistic ghost replay) ───────────────────────────────────
+-- A second, FIXED-RATE stream recorded alongside the distance-gated line above.
+-- It stores full orientation + steer/rpm so the ghost replays exactly how the
+-- car moved (banking, nose-dive, jumps) instead of sliding around flat.
+Config.MotionCapture     = true    -- false = ghosts fall back to the legacy line
+Config.MotionIntervalMs  = 40      -- 25 Hz
+Config.MaxMotionSamples  = 7500    -- ~5 minutes of lap at 25 Hz
+
 -- ── Display ───────────────────────────────────────────────────────────────────
 
 Config.DrawDistance    = 140.0   -- only segments this close to the player render

@@ -24,6 +24,7 @@ local Route      = nil    -- { pts, times (cumulative ms), model }
 local Running    = false
 local RunStart   = 0      -- GetGameTimer() at lap start
 local Cursor     = 1      -- current segment index (monotonic per run)
+local MotCursor  = 1      -- same, for the v4 motion stream
 local CurHeading = 0.0
 
 -- ── Route preparation ─────────────────────────────────────────────────────────
@@ -51,9 +52,13 @@ local function BuildRoute(entry)
     end
 
     return {
-        pts   = pts,
-        times = times,
-        model = (entry.model and entry.model ~= 0) and entry.model or GC.fallbackModel,
+        pts    = pts,
+        times  = times,
+        model  = (entry.model and entry.model ~= 0) and entry.model or GC.fallbackModel,
+        -- v4 fixed-rate motion stream (position + full orientation + steer/rpm).
+        -- When present the replay uses it instead of the flat, heading-only line.
+        motion = (Config.MotionCapture ~= false and type(entry.motion) == "table"
+                  and #entry.motion >= 4) and entry.motion or nil,
     }
 end
 
@@ -144,7 +149,22 @@ local function ResolveEntry()
                 pts[i] = { x = p.x, y = p.y, z = p.z, s = p.s, brk = p.brk,
                            t = p.t and math.floor(p.t * f) or nil }
             end
-            return { points = pts, best = avg, model = entry.model }
+
+            -- Stretch the motion stream by the same factor, so the pace ghost
+            -- keeps the real attitude/steering instead of dropping to the flat
+            -- legacy path. Same line, same car body — just driven slower.
+            local mot = nil
+            if type(entry.motion) == "table" then
+                mot = {}
+                for i, s in ipairs(entry.motion) do
+                    mot[i] = { t = math.floor((s.t or 0) * f),
+                               x = s.x, y = s.y, z = s.z,
+                               qx = s.qx, qy = s.qy, qz = s.qz, qw = s.qw,
+                               steer = s.steer, rpm = s.rpm, flags = s.flags }
+                end
+            end
+
+            return { points = pts, best = avg, model = entry.model, motion = mot }
         end
     end
 
@@ -180,8 +200,17 @@ local function StartRun()
 
     CurHeading = heading
     Cursor     = 1
+    MotCursor  = 1
     RunStart   = GetGameTimer()
     Running    = true
+
+    -- v4: start from the recorded pose so the first frame isn't a flat snap.
+    if Route.motion then
+        local m0 = Route.motion[1]
+        SetEntityCoordsNoOffset(GhostVeh, m0.x, m0.y, m0.z, false, false, false)
+        SetEntityQuaternion(GhostVeh, m0.qx, m0.qy, m0.qz, m0.qw)
+    end
+
     AddGhostBlip()
 end
 
@@ -196,10 +225,75 @@ local function LerpAngle(a, b, f)
     return (a + diff * math.min(f, 1.0)) % 360.0
 end
 
+-- ── Motion replay (v4) ────────────────────────────────────────────────────────
+-- Replays the fixed-rate stream: exact position, FULL orientation (so the car
+-- banks, dives under braking and keeps its attitude over jumps), plus steering
+-- and rpm. This is the "scene director" path — what you actually did, played back.
+
+local function clampv(v) return math.max(-150.0, math.min(150.0, v)) end
+
+--- Returns false once the recorded lap has run out.
+local function ReplayMotion(m, elapsed)
+    local n = #m
+
+    while MotCursor < n - 1 and m[MotCursor + 1].t <= elapsed do
+        MotCursor = MotCursor + 1
+    end
+
+    if elapsed >= m[n].t then return false end
+
+    local a, b = m[MotCursor], m[MotCursor + 1]
+    local span = (b.t or 0) - (a.t or 0)
+    local f    = span > 0 and (elapsed - a.t) / span or 0.0
+
+    -- Position: raw recorded Z — no ground snap, so airtime survives.
+    local x = a.x + (b.x - a.x) * f
+    local y = a.y + (b.y - a.y) * f
+    local z = a.z + (b.z - a.z) * f
+
+    -- Orientation: shortest-arc slerp. THE fidelity win over heading-only.
+    local qx, qy, qz, qw = RL_QuatSlerp(a.qx, a.qy, a.qz, a.qw,
+                                        b.qx, b.qy, b.qz, b.qw, f)
+
+    -- Velocity keeps wheel rotation, engine audio and doppler alive while the
+    -- explicit transform below pins the exact recorded path.
+    local inv = span > 0 and (1000.0 / span) or 0.0
+    FreezeEntityPosition(GhostVeh, false)
+    SetEntityVelocity(GhostVeh,
+        clampv((b.x - a.x) * inv), clampv((b.y - a.y) * inv), clampv((b.z - a.z) * inv))
+
+    SetEntityCoordsNoOffset(GhostVeh, x, y, z, false, false, false)
+    SetEntityQuaternion(GhostVeh, qx, qy, qz, qw)
+
+    -- Cosmetic channel: front wheels actually turn, engine note matches.
+    SetVehicleSteeringAngle(GhostVeh, a.steer or 0.0)
+    SetVehicleCurrentRpm(GhostVeh, a.rpm or 0.0)
+
+    local flags = a.flags or 0
+    SetVehicleBrakeLights(GhostVeh, flags % 2 == 1)
+
+    DisableCamCollisionForObject(GhostVeh)
+    return true
+end
+
 CreateThread(function()
     while true do
         if Running and GhostVeh ~= 0 and DoesEntityExist(GhostVeh) then
             local elapsed = GetGameTimer() - RunStart
+
+            -- v4 motion stream when the lap has one; otherwise the legacy line.
+            if Route.motion then
+                if not ReplayMotion(Route.motion, elapsed) then
+                    SetEntityVisible(GhostVeh, false, false)
+                    FreezeEntityPosition(GhostVeh, true)
+                    SetEntityVelocity(GhostVeh, 0.0, 0.0, 0.0)
+                    RemoveGhostBlip()
+                    Running = false
+                end
+                Wait(0)
+                goto continue
+            end
+
             local pts, times = Route.pts, Route.times
             local n = #pts
 
@@ -254,6 +348,7 @@ CreateThread(function()
         else
             Wait(250)
         end
+        ::continue::
     end
 end)
 
