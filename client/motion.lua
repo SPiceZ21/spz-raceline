@@ -2,7 +2,7 @@
 -- P0 spike: high-fidelity motion capture for the ghost ("scene director" style).
 --
 -- The legacy line (v3 `p`) stays exactly as it was — it is distance-gated and
--- drives the painted ribbon + coach analysis. This module records a SECOND,
+-- drives the painted ribbon. This module records a SECOND,
 -- parallel stream at a FIXED RATE that exists purely to replay the car:
 --
 --   • fixed 25 Hz  — the old 2 m distance gate sampled slow corners at only ~7 Hz

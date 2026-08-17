@@ -46,7 +46,6 @@ coasting. In time trials it also replays that lap as a translucent ghost car.
 | Shared | `config.lua` | Sampling, ranges, draw caps |
 | Client | `client/main.lua` | Capture, storage bridge, rendering |
 | Client | `client/ghost.lua` | Ghost car replay |
-| Client | `client/coach.lua` | Coaching cues |
 | Client | `client/crown.lua` | Track-crown display |
 | Server | `server/main.lua` | Line persistence and best-lap gating |
 | Server | `server/crown.lua` | Track crown ownership |
@@ -62,12 +61,8 @@ coasting. In time trials it also replays that lap as a translucent ghost car.
 | `/raceline ghost pb` | Ghost your own best lap (default) |
 | `/raceline ghost record` | Ghost the track record holder — gold car, fetched server-side |
 | `/raceline ghost pace` | Ghost your session average — blue car, always catchable |
-| `/raceline coach` | Toggle the coaching overlay (off by default) |
 
 `Raceline: Toggle Display` is also bindable in Settings → Key Bindings.
-
-The coaching overlay paints the road red where you lost time against your reference lap,
-with `-Xs` markers at the worst spots.
 
 ## Exports
 
@@ -78,7 +73,6 @@ with `-Xs` markers at the worst spots.
 | `GetLineByPlayerId(id)` | Fetch another player's stored line |
 | `GetBotLines()` | Reference lines for bots |
 | `GetRecordSummary()` | Track record summary |
-| `IsCoachOn()` | Coaching state |
 | `PublishCrown()` | Publish track crown ownership |
 
 Point format: `{ x, y, z, s, brk }` where `s` = 0 coast / 1 throttle / 2 brake.

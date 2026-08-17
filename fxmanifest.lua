@@ -18,7 +18,6 @@ client_scripts {
   'client/vehspec.lua',     -- RL_SpecCapture / RL_SpecApply
   'client/main.lua',
   'client/ghost.lua',
-  'client/coach.lua',
   'client/crown.lua',
 }
 

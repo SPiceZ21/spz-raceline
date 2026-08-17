@@ -112,7 +112,7 @@ local function FlattenLine(pts, splits)
 
     -- v4 adds `r`: the fixed-rate motion stream (position + full orientation +
     -- steer/rpm) the ghost replays. `p` is untouched, so anything that only
-    -- knows v3 — the painted ribbon, the coach — keeps reading it as before.
+    -- knows v3 — the painted ribbon — keeps reading it as before.
     -- v5 adds per-wheel speeds (stride `rf`) and `s`: the vehicle spec header.
     if Config.MotionCapture ~= false then
         local frozen = RL_MotFrozen()
@@ -344,23 +344,6 @@ end)
 RegisterNetEvent("SPZ:tt:LapComplete", function()
     if not TTTrack then return end
 
-    -- Coaching: compare the lap just driven against the reference BEFORE
-    -- FreezeLap clears Cap. Reference = record line if the record ghost is on,
-    -- otherwise the personal best.
-    if RL_CoachAnalyse and exports[GetCurrentResourceName()]:IsCoachOn()
-       and Cap and #Cap > 3 then
-        local ref
-        if GhostMode == "record" and RL_GetRecordEntry then
-            local rec = RL_GetRecordEntry(TTTrack)
-            ref = rec and rec.points
-        end
-        if not ref then
-            local pb = RL_GetEntry and RL_GetEntry(TTTrack)
-            ref = pb and pb.points
-        end
-        if ref then RL_CoachAnalyse(Cap, ref) end
-    end
-
     FreezeLap()          -- moves Cap -> LastLap and clears Cap
 end)
 
@@ -393,7 +376,6 @@ RegisterNetEvent("SPZ:tt:End", function()
     StopCapture()
     TTTrack, TTType = nil, nil
     ClearAutoDisplay()
-    if RL_CoachClear then RL_CoachClear() end
 end)
 
 -- ── Race hooks ────────────────────────────────────────────────────────────────
@@ -630,12 +612,8 @@ RegisterCommand("raceline", function(_, args)
             local on = RL_GhostToggle and RL_GhostToggle()
             Notify(on and "Raceline: ghost car ~g~ON~s~" or "Raceline: ghost car ~r~OFF~s~")
         end
-    elseif sub == "coach" then
-        local on = RL_CoachToggle and RL_CoachToggle()
-        Notify(on and "Raceline: coach overlay ~g~ON~s~ — finish a lap to see where you lose time"
-                   or "Raceline: coach overlay ~r~OFF~s~")
     else
-        Notify("Usage: /raceline show | hide | ghost [pb|record|pace] | coach")
+        Notify("Usage: /raceline show | hide | ghost [pb|record|pace]")
     end
 end, false)
 
@@ -672,7 +650,7 @@ exports("LoadLine", function(pts)
     return Count > 0
 end)
 
--- ── Ghost accessors (same-resource globals, read by ghost.lua / coach.lua) ───
+-- ── Ghost accessors (same-resource globals, read by ghost.lua) ──────────────
 function RL_GetEntry(track)
     return LineCache[track]
 end
