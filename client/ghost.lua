@@ -27,6 +27,17 @@ local Cursor     = 1      -- current segment index (monotonic per run)
 local MotCursor  = 1      -- same, for the v4 motion stream
 local CurHeading = 0.0
 
+-- Spawn/despawn fade. The ghost used to pop in at the line and vanish at the
+-- flag; easing the alpha reads as a car arriving rather than an entity appearing.
+local FadeDir   = 0       -- 1 fading in, -1 fading out, 0 idle
+local FadeStart = 0
+
+-- Forward-declared: StartRun calls these before their definitions appear, and a
+-- `local function` defined later would not be in scope there (it would silently
+-- resolve to a nil global). Kept local so the names cannot collide with the
+-- other files sharing this resource's environment.
+local BeginFadeIn, BeginFadeOut, TickFade
+
 -- ── Route preparation ─────────────────────────────────────────────────────────
 
 local function BuildRoute(entry)
@@ -75,6 +86,7 @@ end
 
 local function DeleteGhost()
     Running = false
+    FadeDir = 0
     RemoveGhostBlip()
     if GhostVeh ~= 0 and DoesEntityExist(GhostVeh) then
         DeleteEntity(GhostVeh)
@@ -169,6 +181,7 @@ local function ResolveEntry()
                                x = s.x, y = s.y, z = s.z,
                                qx = s.qx, qy = s.qy, qz = s.qz, qw = s.qw,
                                steer = s.steer, rpm = s.rpm, flags = s.flags,
+                               gear = s.gear,
                                -- wheels turn slower in proportion to the pace
                                w = s.w and { s.w[1] / f, s.w[2] / f,
                                              s.w[3] / f, s.w[4] / f } or nil }
@@ -223,6 +236,7 @@ local function StartRun()
     MotCursor  = 1
     RunStart   = GetGameTimer()
     Running    = true
+    BeginFadeIn()
 
     -- v4: start from the recorded pose so the first frame isn't a flat snap.
     if Route.motion then
@@ -254,8 +268,52 @@ end
 
 local function clampv(v) return math.max(-150.0, math.min(150.0, v)) end
 
+-- Hoisted out of the replay: defining these inside it allocated a closure on
+-- every frame, for every ghost.
+local function lerp(u, v, f) u = u or 0.0; return u + ((v or 0.0) - u) * f end
+local function hasBit(flags, bit) return math.floor(flags / bit) % 2 == 1 end
+
+-- ── Fade ──────────────────────────────────────────────────────────────────────
+
+BeginFadeIn = function()
+    if GhostVeh == 0 then return end
+    FadeDir, FadeStart = 1, GetGameTimer()
+    SetEntityAlpha(GhostVeh, 0, false)
+end
+
+BeginFadeOut = function()
+    if FadeDir == -1 then return end          -- already on the way out
+    FadeDir, FadeStart = -1, GetGameTimer()
+end
+
+--- Advances the fade and finishes the run once a fade-out completes.
+TickFade = function()
+    if FadeDir == 0 or GhostVeh == 0 or not DoesEntityExist(GhostVeh) then return end
+
+    local dur  = GC.fadeMs or 400
+    local full = GC.alpha or 150
+    local t    = math.min(1.0, (GetGameTimer() - FadeStart) / dur)
+
+    if FadeDir == 1 then
+        SetEntityAlpha(GhostVeh, math.floor(full * t), false)
+        if t >= 1.0 then FadeDir = 0 end
+    else
+        SetEntityAlpha(GhostVeh, math.floor(full * (1.0 - t)), false)
+        if t >= 1.0 then
+            FadeDir = 0
+            SetEntityVisible(GhostVeh, false, false)
+            FreezeEntityPosition(GhostVeh, true)
+            SetEntityVelocity(GhostVeh, 0.0, 0.0, 0.0)
+            SetEntityAngularVelocity(GhostVeh, 0.0, 0.0, 0.0)
+            RemoveGhostBlip()
+            Running = false
+        end
+    end
+end
+
 --- Returns false once the recorded lap has run out.
-local function ReplayMotion(m, elapsed)
+--- `cosmetic` false = far away, transform only (see LOD note below).
+local function ReplayMotion(m, elapsed, cosmetic)
     local n = #m
 
     while MotCursor < n - 1 and m[MotCursor + 1].t <= elapsed do
@@ -264,47 +322,94 @@ local function ReplayMotion(m, elapsed)
 
     if elapsed >= m[n].t then return false end
 
-    local a, b = m[MotCursor], m[MotCursor + 1]
-    local span = (b.t or 0) - (a.t or 0)
-    local f    = span > 0 and (elapsed - a.t) / span or 0.0
+    -- Four control points: the spline runs between p1 and p2, shaped by the
+    -- neighbours either side. Ends clamp onto themselves.
+    local p1 = m[MotCursor]
+    local p2 = m[MotCursor + 1]
+    local p0 = m[math.max(1, MotCursor - 1)]
+    local p3 = m[math.min(n, MotCursor + 2)]
 
-    -- Position: raw recorded Z — no ground snap, so airtime survives.
-    local x = a.x + (b.x - a.x) * f
-    local y = a.y + (b.y - a.y) * f
-    local z = a.z + (b.z - a.z) * f + (GC.motionZLift or 0.0)
+    local span = (p2.t or 0) - (p1.t or 0)
+    local f    = span > 0 and (elapsed - p1.t) / span or 0.0
+    local dt   = span > 0 and (span / 1000.0) or 0.0
+
+    -- Position: Catmull-Rom through the recorded points (no chorded corners),
+    -- on raw recorded Z so airtime survives.
+    local x = RL_CatmullRom(p0.x, p1.x, p2.x, p3.x, f)
+    local y = RL_CatmullRom(p0.y, p1.y, p2.y, p3.y, f)
+    local z = RL_CatmullRom(p0.z, p1.z, p2.z, p3.z, f) + (GC.motionZLift or 0.0)
 
     -- Orientation: shortest-arc slerp. THE fidelity win over heading-only.
-    local qx, qy, qz, qw = RL_QuatSlerp(a.qx, a.qy, a.qz, a.qw,
-                                        b.qx, b.qy, b.qz, b.qw, f)
+    local qx, qy, qz, qw = RL_QuatSlerp(p1.qx, p1.qy, p1.qz, p1.qw,
+                                        p2.qx, p2.qy, p2.qz, p2.qw, f)
 
-    -- Must stay UNFROZEN: a frozen entity ignores the per-frame coord writes and
-    -- the ghost just sits at the start line. Sinking is kept out by disabling
-    -- gravity on the entity at spawn (it has collision off, so there is no
-    -- ground to rest on), not by freezing it.
-    local inv = span > 0 and (1000.0 / span) or 0.0
+    -- ── Puppet physics ────────────────────────────────────────────────────────
+    -- The car is driven entirely by these writes. It must stay UNFROZEN (a frozen
+    -- entity ignores coord writes and the ghost just sits at the start line), so
+    -- everything that could fight us is neutralised instead: no gravity, no
+    -- collision, and linear + angular velocity fed to match the path so the rigid
+    -- body moves WITH the transform rather than against it.
     FreezeEntityPosition(GhostVeh, false)
-    SetEntityHasGravity(GhostVeh, false)     -- re-assert: nothing should pull it down
-    SetEntityVelocity(GhostVeh,
-        clampv((b.x - a.x) * inv), clampv((b.y - a.y) * inv), clampv((b.z - a.z) * inv))
+    SetEntityHasGravity(GhostVeh, false)
+
+    -- Velocity from the spline tangent — the true instantaneous direction and
+    -- speed along the curve, not a straight chord between samples.
+    if dt > 0.0 then
+        SetEntityVelocity(GhostVeh,
+            clampv(RL_CatmullRomDeriv(p0.x, p1.x, p2.x, p3.x, f) / dt),
+            clampv(RL_CatmullRomDeriv(p0.y, p1.y, p2.y, p3.y, f) / dt),
+            clampv(RL_CatmullRomDeriv(p0.z, p1.z, p2.z, p3.z, f) / dt))
+
+        local wx, wy, wz = RL_QuatAngularVelocity(
+            p1.qx, p1.qy, p1.qz, p1.qw, p2.qx, p2.qy, p2.qz, p2.qw, dt)
+        SetEntityAngularVelocity(GhostVeh, wx, wy, wz)
+    end
 
     SetEntityCoordsNoOffset(GhostVeh, x, y, z, false, false, false)
     SetEntityQuaternion(GhostVeh, qx, qy, qz, qw)
 
-    -- Cosmetic channel: front wheels actually turn, engine note matches.
-    SetVehicleSteeringAngle(GhostVeh, a.steer or 0.0)
-    SetVehicleCurrentRpm(GhostVeh, a.rpm or 0.0)
+    -- Cosmetic channel, interpolated across the segment too — held constant it
+    -- stepped 25 times a second, which read as a twitchy wheel and a stuttering
+    -- engine note.
+    --
+    -- LOD: transform is what sells a ghost at range; the cosmetic channel is
+    -- invisible past a few dozen metres but costs a native call each, every
+    -- frame, per ghost. Skip it when far away.
+    if not cosmetic then
+        DisableCamCollisionForObject(GhostVeh)
+        return true
+    end
+
+    SetVehicleSteeringAngle(GhostVeh, lerp(p1.steer, p2.steer, f))
+    SetVehicleCurrentRpm(GhostVeh, lerp(p1.rpm, p2.rpm, f))
 
     -- Per-wheel rotation replays real lockup under braking and wheelspin on
     -- corner exit — velocity alone only ever gives spin proportional to speed.
-    if a.w and GC.applyWheels ~= false and RL_WheelsSupported() then
+    if p1.w and GC.applyWheels ~= false and RL_WheelsSupported() then
+        local w2 = p2.w or p1.w
         for i = 0, 3 do
-            local ws = a.w[i + 1]
-            if ws then RL_WheelSet(GhostVeh, i, ws) end
+            local ws = p1.w[i + 1]
+            if ws then RL_WheelSet(GhostVeh, i, lerp(ws, w2[i + 1], f)) end
         end
     end
 
-    local flags = a.flags or 0
-    SetVehicleBrakeLights(GhostVeh, flags % 2 == 1)
+    -- Gear drives the tacho and the shift points in the engine note (and puts
+    -- the reverse lights on by itself when it is 0).
+    if p1.gear then SetVehicleCurrentGear(GhostVeh, math.floor(p1.gear)) end
+
+    -- Discrete states snap at the sample, which is correct — a brake light is
+    -- on or off, never half.
+    local flags = p1.flags or 0
+
+    SetVehicleBrakeLights(GhostVeh, hasBit(flags, 1))
+
+    -- Light bits arrived with gear, so gear's presence marks a recording that
+    -- actually has them. Without it there is no way to tell "lights were off"
+    -- from "lights were never recorded", and older laps would replay dark.
+    if p1.gear then
+        SetVehicleLights(GhostVeh, hasBit(flags, 16) and 2 or 1)  -- 2 forced on, 1 forced off
+        SetVehicleFullbeam(GhostVeh, hasBit(flags, 32))
+    end
 
     DisableCamCollisionForObject(GhostVeh)
     return true
@@ -317,14 +422,19 @@ CreateThread(function()
 
             -- v4 motion stream when the lap has one; otherwise the legacy line.
             if Route.motion then
-                if not ReplayMotion(Route.motion, elapsed) then
-                    SetEntityVisible(GhostVeh, false, false)
-                    FreezeEntityPosition(GhostVeh, true)
-                    SetEntityVelocity(GhostVeh, 0.0, 0.0, 0.0)
-                    RemoveGhostBlip()
-                    Running = false
+                -- LOD by distance from the player. A ghost you are racing is
+                -- right next to you; one half a lap away only needs to be in the
+                -- right place, so drop its cosmetic natives and tick it less
+                -- often. Keeps a field of replayed bots affordable.
+                local d = #(GetEntityCoords(PlayerPedId()) - GetEntityCoords(GhostVeh))
+                local cosmetic = d < (GC.lodDistance or 70.0)
+                local far      = d > (GC.farDistance or 160.0)
+
+                if not ReplayMotion(Route.motion, elapsed, cosmetic) then
+                    BeginFadeOut()
                 end
-                Wait(0)
+                TickFade()
+                Wait(far and 50 or 0)
                 goto continue
             end
 
@@ -337,12 +447,8 @@ CreateThread(function()
             end
 
             if elapsed >= times[n] then
-                -- Ghost lap done: hide and wait for the player's next lap
-                SetEntityVisible(GhostVeh, false, false)
-                FreezeEntityPosition(GhostVeh, true)
-                SetEntityVelocity(GhostVeh, 0.0, 0.0, 0.0)
-                RemoveGhostBlip()
-                Running = false
+                -- Ghost lap done: fade out, same as the motion path.
+                BeginFadeOut()
             else
                 local a, b   = pts[Cursor], pts[Cursor + 1]
                 local ta, tb = times[Cursor], times[Cursor + 1]
@@ -378,6 +484,7 @@ CreateThread(function()
                 -- brake lights where you braked
                 SetVehicleBrakeLights(GhostVeh, b.s == 2)
             end
+            TickFade()
             Wait(0)
         else
             Wait(250)

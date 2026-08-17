@@ -115,12 +115,22 @@ local function FlattenLine(pts, splits)
     -- knows v3 — the painted ribbon, the coach — keeps reading it as before.
     -- v5 adds per-wheel speeds (stride `rf`) and `s`: the vehicle spec header.
     if Config.MotionCapture ~= false then
-        local motion, stride = RL_MotFlatten()
-        if motion then
-            out.v  = 5
-            out.r  = motion
-            out.rf = stride or RL_MOTION_FIELDS
-            out.s  = LastLapSpec or CapSpec or nil
+        local frozen = RL_MotFrozen()
+        if frozen then
+            local stride = RL_MotStride()
+
+            -- Prefer the packed form: same data at roughly a fifth of the size.
+            -- `r` is a base64 STRING when packed and a flat numeric array when
+            -- not, so the decoder tells them apart without another version field.
+            local r = RL_MotPack(frozen, stride)
+            if not r then r = RL_MotFlatten() end
+
+            if r then
+                out.v  = 5
+                out.r  = r
+                out.rf = stride
+                out.s  = LastLapSpec or CapSpec or nil
+            end
         end
     end
 
@@ -143,7 +153,15 @@ local function ExpandLine(data)
         -- v2 has no splits; the ghost then runs unanchored (previous behaviour)
         local splits = (data.v >= 3) and data.c or nil
         -- v4 recordings carry no stride (11 fields); v5 states it in `rf`.
-        local motion = (data.v >= 4) and RL_MotExpand(data.r, data.rf or 11) or nil
+        -- `r` is base64 when packed (P4) and a flat numeric array otherwise.
+        local motion = nil
+        if data.v >= 4 then
+            if type(data.r) == "string" then
+                motion = RL_MotUnpack(data.r)
+            else
+                motion = RL_MotExpand(data.r, data.rf or 11)
+            end
+        end
         local spec   = (data.v >= 5) and data.s or nil
         return pts, data.m, splits, motion, spec
     end

@@ -17,11 +17,27 @@
 
 RL_Motion = RL_Motion or {}
 
--- Stride is written into the payload (`rf`) so old recordings stay readable:
---   v4 = 11 fields (no wheel speeds), v5 = 15 (adds per-wheel rotation).
-RL_MOTION_FIELDS = 15   -- t,x,y,z,qx,qy,qz,qw,steer,rpm,flags,w1..w4
-local FIELDS = RL_MOTION_FIELDS
+-- Stride is written into the payload (`rf`) so old recordings stay readable.
+-- Base block is always 11: t,x,y,z,qx,qy,qz,qw,steer,rpm,flags.
+-- Optional blocks are APPENDED, never inserted, so a stride recorded by an older
+-- build still decodes to the same fields:
+--   +4 wheels (w1..w4) at 12..15   — only when this build can replay them
+--   +1 gear                        — last field
+local LAYOUTS = {
+    [11] = { wheels = nil, gear = nil },
+    [12] = { wheels = nil, gear = 12 },
+    [15] = { wheels = 12,  gear = nil },   -- recorded before gear existed
+    [16] = { wheels = 12,  gear = 16 },
+}
+
+RL_MOTION_FIELDS = 16
 local MAX_WHEELS = 4
+
+--- Field layout for a stride, or nil when the stride is unknown. Shared with
+--- the binary packer so both encodings follow the same field rules.
+function RL_MotLayout(stride)
+    return LAYOUTS[tonumber(stride) or -1]
+end
 
 local Buf      = {}    -- current lap's samples
 local Frozen   = nil   -- last completed lap's samples
@@ -90,6 +106,54 @@ function RL_QuatSlerp(ax, ay, az, aw, bx, by, bz, bw, t)
     return ax * s1 + bx * s2, ay * s1 + by * s2, az * s1 + bz * s2, aw * s1 + bw * s2
 end
 
+--- Angular velocity (rad/s) that carries orientation `a` to `b` over `dt`
+--- seconds. Feeding this to the entity stops the rigid body fighting the
+--- per-frame quaternion writes, which is what made the ghost twitch.
+function RL_QuatAngularVelocity(ax, ay, az, aw, bx, by, bz, bw, dt)
+    if not dt or dt <= 0.0 then return 0.0, 0.0, 0.0 end
+
+    -- qd = b * conjugate(a)
+    local cx, cy, cz, cw = -ax, -ay, -az, aw
+    local qx = bw * cx + bx * cw + by * cz - bz * cy
+    local qy = bw * cy - bx * cz + by * cw + bz * cx
+    local qz = bw * cz + bx * cy - by * cx + bz * cw
+    local qw = bw * cw - bx * cx - by * cy - bz * cz
+
+    if qw < 0.0 then qx, qy, qz, qw = -qx, -qy, -qz, -qw end   -- shortest arc
+
+    qw = math.max(-1.0, math.min(1.0, qw))
+    local s = math.sqrt(math.max(0.0, 1.0 - qw * qw))
+    if s < 1e-6 then return 0.0, 0.0, 0.0 end                  -- no rotation
+
+    local scale = (2.0 * math.acos(qw)) / (s * dt)
+    return qx * scale, qy * scale, qz * scale
+end
+
+-- ── Catmull-Rom ───────────────────────────────────────────────────────────────
+-- Linear interpolation between 25 Hz samples chords every corner: at speed the
+-- ghost visibly cut the apex compared to the line actually driven. A Catmull-Rom
+-- spline passes exactly through every recorded point and curves between them, so
+-- the replayed path matches what was driven.
+
+--- Position on the spline between p1 and p2 (t = 0..1).
+function RL_CatmullRom(p0, p1, p2, p3, t)
+    local t2 = t * t
+    local t3 = t2 * t
+    return 0.5 * ((2.0 * p1)
+        + (-p0 + p2) * t
+        + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t2
+        + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t3)
+end
+
+--- d/dt of the above — the true tangent, used for velocity so the car's speed
+--- matches the curve it is actually following rather than a straight chord.
+function RL_CatmullRomDeriv(p0, p1, p2, p3, t)
+    local t2 = t * t
+    return 0.5 * ((-p0 + p2)
+        + 2.0 * (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t
+        + 3.0 * (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t2)
+end
+
 -- ── Capture ───────────────────────────────────────────────────────────────────
 
 function RL_MotReset()
@@ -108,11 +172,17 @@ function RL_MotSample(veh, tMs, brake, handbrake)
     local pos = GetEntityCoords(veh)
     local qx, qy, qz, qw = GetEntityQuaternion(veh)
 
+    -- Bitfield: 1 brake · 2 handbrake · 4 burnout · 8 airborne
+    --           16 headlights · 32 highbeams
     local flags = 0
     if brake then flags = flags + 1 end
     if handbrake then flags = flags + 2 end
     if IsVehicleInBurnout(veh) then flags = flags + 4 end
     if IsEntityInAir(veh) then flags = flags + 8 end
+
+    local _, lightsOn, highBeams = GetVehicleLightsState(veh)
+    if lightsOn then flags = flags + 16 end
+    if highBeams then flags = flags + 32 end
 
     -- Per-wheel rotation speed. Recording it (rather than deriving spin from
     -- road speed) is what preserves lockup under braking and wheelspin on
@@ -136,6 +206,7 @@ function RL_MotSample(veh, tMs, brake, handbrake)
         rpm   = GetVehicleCurrentRpm(veh),
         flags = flags,
         w     = w,
+        gear  = GetVehicleCurrentGear(veh),
     }
 end
 
@@ -154,6 +225,16 @@ function RL_MotFrozen()
     return (type(Frozen) == "table" and #Frozen >= 4) and Frozen or nil
 end
 
+--- Narrowest stride that fits what the frozen lap actually captured. Keeping
+--- this separate from flattening lets the packer ask for it without building
+--- the flat array first.
+function RL_MotStride()
+    local s = Frozen and Frozen[1]
+    if not s then return 11 end
+    local hasWheels, hasGear = s.w ~= nil, s.gear ~= nil
+    return hasWheels and (hasGear and 16 or 15) or (hasGear and 12 or 11)
+end
+
 -- ── Serialisation (flat numeric array — msgpack friendly) ────────────────────
 
 local function r2(v) return math.floor((v or 0) * 100 + 0.5) / 100 end     -- 1 cm
@@ -167,7 +248,8 @@ function RL_MotFlatten()
     local src = Frozen
     if type(src) ~= "table" or #src < 4 then return nil end
 
-    local stride = (src[1] and src[1].w) and FIELDS or 11
+    local stride = RL_MotStride()
+    local L      = LAYOUTS[stride]
 
     local flat = {}
     for i = 1, #src do
@@ -184,13 +266,13 @@ function RL_MotFlatten()
         flat[n + 9]  = r2(s.steer)
         flat[n + 10] = r3(s.rpm)
         flat[n + 11] = s.flags or 0
-        if stride >= 15 then
+        if L.wheels then
             local w = s.w or {}
-            flat[n + 12] = r2(w[1])
-            flat[n + 13] = r2(w[2])
-            flat[n + 14] = r2(w[3])
-            flat[n + 15] = r2(w[4])
+            for k = 0, MAX_WHEELS - 1 do
+                flat[n + L.wheels + k] = r2(w[k + 1])
+            end
         end
+        if L.gear then flat[n + L.gear] = math.floor(s.gear or 0) end
     end
     return flat, stride
 end
@@ -199,7 +281,8 @@ end
 --- defaulting to 11 so v4 recordings (no wheel speeds) still decode.
 function RL_MotExpand(flat, stride)
     stride = tonumber(stride) or 11
-    if stride < 11 then return nil end
+    local L = LAYOUTS[stride]
+    if not L then return nil end                       -- unknown layout: ignore
     if type(flat) ~= "table" or #flat < stride * 4 then return nil end
 
     local out = {}
@@ -212,10 +295,13 @@ function RL_MotExpand(flat, stride)
             rpm   = flat[i + 9],
             flags = flat[i + 10] or 0,
         }
-        if stride >= 15 then
-            s.w = { flat[i + 11] or 0, flat[i + 12] or 0,
-                    flat[i + 13] or 0, flat[i + 14] or 0 }
+        if L.wheels then
+            s.w = {}
+            for k = 0, MAX_WHEELS - 1 do
+                s.w[k + 1] = flat[i + L.wheels - 1 + k] or 0
+            end
         end
+        if L.gear then s.gear = flat[i + L.gear - 1] end
         out[#out + 1] = s
     end
     return out

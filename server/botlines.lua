@@ -39,8 +39,12 @@ exports("GetBotLines", function(track, count)
 
     -- Pool the fastest lines for this track (one per player already, since the
     -- racelines table stores a single best line per player/track).
+    --
+    -- Deliberately WITHOUT `points`: a stored line now carries the packed motion
+    -- stream, so pulling 20 of them to use a handful moved megabytes for nothing.
+    -- Pick from the cheap metadata, then fetch only the lines actually chosen.
     local pool = MySQL.query.await([[
-        SELECT r.points, r.best_ms, pl.username, r.player_id
+        SELECT r.id, r.best_ms, pl.username, r.player_id
         FROM racelines r JOIN players pl ON pl.id = r.player_id
         WHERE r.track = ?
         ORDER BY r.best_ms ASC
@@ -64,9 +68,24 @@ exports("GetBotLines", function(track, count)
         end
     end
 
+    if #picks == 0 then return {} end
+
+    -- Now fetch the lines for just the chosen rows.
+    local ids, holes = {}, {}
+    for i, row in ipairs(picks) do ids[i] = row.id; holes[i] = "?" end
+
+    local lineRows = MySQL.query.await(
+        ("SELECT id, points FROM racelines WHERE id IN (%s)"):format(table.concat(holes, ",")),
+        ids
+    ) or {}
+
+    local byId = {}
+    for _, r in ipairs(lineRows) do byId[r.id] = r.points end
+
     local out = {}
     for _, row in ipairs(picks) do
-        local ok, stored = pcall(json.decode, row.points)
+        local raw = byId[row.id]
+        local ok, stored = pcall(json.decode, raw or "")
         if ok and type(stored) == "table" and type(stored.p) == "table" and #stored.p >= 10 then
             out[#out + 1] = {
                 name   = row.username or "Ghost",

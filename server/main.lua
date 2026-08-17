@@ -86,9 +86,21 @@ RegisterNetEvent("spz-raceline:submitCapture", function(track, payload)
     -- (t,x,y,z,qx,qy,qz,qw,steer,rpm,flags[,w1..w4]).
     -- Rejected wholesale if malformed — the line still stores fine without it.
     local motion, stride = nil, nil
-    if payload.v >= 4 and type(payload.r) == "table" then
+    if payload.v >= 4 then
         local rf = (payload.v >= 5) and tonumber(payload.rf) or 11
-        if rf and rf >= 11 and rf <= 32 then
+
+        if type(payload.r) == "string" and rf and rf >= 11 and rf <= 32 then
+            -- Packed (base64). Opaque to the server, so validate shape only:
+            -- charset and a size ceiling derived from the worst-case sample
+            -- width. It is replayed client-side as the submitter's own ghost,
+            -- so garbage can only ever spoil their own replay.
+            local maxBytes = math.ceil(((Config.MaxMotionSamples or 7500) * 32 + 64) * 4 / 3) + 8
+            if #payload.r >= 16 and #payload.r <= maxBytes
+               and payload.r:match("^[A-Za-z0-9+/=]+$") then
+                motion, stride = payload.r, rf
+            end
+
+        elseif type(payload.r) == "table" and rf and rf >= 11 and rf <= 32 then
             local rn   = #payload.r
             local maxN = (Config.MaxMotionSamples or 7500) * rf
             if rn >= rf * 4 and rn % rf == 0 and rn <= maxN then
@@ -189,7 +201,9 @@ RegisterNetEvent("spz-raceline:getLine", function(track)
     local ok, flat = pcall(json.decode, row.points)
     if not ok or type(flat) ~= "table" then return end
 
-    TriggerClientEvent("spz-raceline:line", src, track, flat, row.best_ms)
+    -- LATENT: a v5 line carries the packed motion stream (~100 KB), which a
+    -- plain reliable event can silently drop — the ghost would then never load.
+    TriggerLatentClientEvent("spz-raceline:line", src, 200000, track, flat, row.best_ms)
 end)
 
 -- ── Cleanup ───────────────────────────────────────────────────────────────────
@@ -238,7 +252,8 @@ RegisterNetEvent("spz-raceline:getRecordLine", function(track)
     local rec = GetRecordRow(track)
     if not rec.points then return end
 
-    TriggerClientEvent("spz-raceline:recordLine", src, track, rec.points, rec.best, rec.holder)
+    TriggerLatentClientEvent("spz-raceline:recordLine", src, 200000,
+        track, rec.points, rec.best, rec.holder)
 end)
 
 -- Summary only (no line payload) — for menus/leaderboards

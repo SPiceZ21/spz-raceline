@@ -60,6 +60,14 @@ Config.Ghost = {
     -- Nudge the motion-replay height. Motion stores the car's true origin so
     -- this should stay 0; only touch it if a model sits oddly.
     motionZLift   = 0.0,
+
+    -- Ease the ghost in at the line and out at the flag instead of popping.
+    fadeMs        = 400,
+    -- LOD: beyond this the cosmetic channel (steer/rpm/wheels/lights) is
+    -- skipped — invisible at range, one native call each per frame per ghost.
+    lodDistance   = 70.0,
+    -- Beyond this the replay ticks at 20 Hz instead of every frame.
+    farDistance   = 160.0,
 }
 
 -- ── Track ownership tax ───────────────────────────────────────────────────────
