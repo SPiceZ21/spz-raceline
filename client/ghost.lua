@@ -59,6 +59,8 @@ local function BuildRoute(entry)
         -- When present the replay uses it instead of the flat, heading-only line.
         motion = (Config.MotionCapture ~= false and type(entry.motion) == "table"
                   and #entry.motion >= 4) and entry.motion or nil,
+        -- Paint / mods / wheels of the car that actually set the lap.
+        spec   = (type(entry.spec) == "table") and entry.spec or nil,
     }
 end
 
@@ -110,6 +112,12 @@ local function SpawnGhost(model, at, heading)
     SetEntityCollision(GhostVeh, false, false)
     SetEntityInvincible(GhostVeh, true)
     FreezeEntityPosition(GhostVeh, true)   -- we drive it by hand every frame
+
+    -- The replay unfreezes the car so its wheels can turn, but with collision
+    -- off there is no ground to rest on — gravity then drags it under the map
+    -- between our per-frame writes. Nothing about a ghost should fall.
+    SetEntityHasGravity(GhostVeh, false)
+
     SetVehicleEngineOn(GhostVeh, true, true, false)
     SetVehicleLights(GhostVeh, 2)
     return true
@@ -160,11 +168,15 @@ local function ResolveEntry()
                     mot[i] = { t = math.floor((s.t or 0) * f),
                                x = s.x, y = s.y, z = s.z,
                                qx = s.qx, qy = s.qy, qz = s.qz, qw = s.qw,
-                               steer = s.steer, rpm = s.rpm, flags = s.flags }
+                               steer = s.steer, rpm = s.rpm, flags = s.flags,
+                               -- wheels turn slower in proportion to the pace
+                               w = s.w and { s.w[1] / f, s.w[2] / f,
+                                             s.w[3] / f, s.w[4] / f } or nil }
                 end
             end
 
-            return { points = pts, best = avg, model = entry.model, motion = mot }
+            return { points = pts, best = avg, model = entry.model,
+                     motion = mot, spec = entry.spec }
         end
     end
 
@@ -191,6 +203,14 @@ local function StartRun()
 
     SetEntityVisible(GhostVeh, true, false)
 
+    -- Rebuild the car that actually set the lap (paint, mods, wheels, livery).
+    -- Applied BEFORE the mode tint so "record"/"pace" colours still win.
+    -- pcall'd: a mod value the ghost's model does not support must not abort
+    -- the run and leave a half-placed car.
+    if Route.spec and GC.applySpec ~= false then
+        pcall(RL_SpecApply, GhostVeh, Route.spec)
+    end
+
     -- Mode tint so you always know WHICH ghost you're racing
     local tint = MODE_TINT[GhostMode]
     if tint then
@@ -207,7 +227,9 @@ local function StartRun()
     -- v4: start from the recorded pose so the first frame isn't a flat snap.
     if Route.motion then
         local m0 = Route.motion[1]
-        SetEntityCoordsNoOffset(GhostVeh, m0.x, m0.y, m0.z, false, false, false)
+        FreezeEntityPosition(GhostVeh, true)
+        SetEntityCoordsNoOffset(GhostVeh, m0.x, m0.y, m0.z + (GC.motionZLift or 0.0),
+            false, false, false)
         SetEntityQuaternion(GhostVeh, m0.qx, m0.qy, m0.qz, m0.qw)
     end
 
@@ -249,16 +271,19 @@ local function ReplayMotion(m, elapsed)
     -- Position: raw recorded Z — no ground snap, so airtime survives.
     local x = a.x + (b.x - a.x) * f
     local y = a.y + (b.y - a.y) * f
-    local z = a.z + (b.z - a.z) * f
+    local z = a.z + (b.z - a.z) * f + (GC.motionZLift or 0.0)
 
     -- Orientation: shortest-arc slerp. THE fidelity win over heading-only.
     local qx, qy, qz, qw = RL_QuatSlerp(a.qx, a.qy, a.qz, a.qw,
                                         b.qx, b.qy, b.qz, b.qw, f)
 
-    -- Velocity keeps wheel rotation, engine audio and doppler alive while the
-    -- explicit transform below pins the exact recorded path.
+    -- Must stay UNFROZEN: a frozen entity ignores the per-frame coord writes and
+    -- the ghost just sits at the start line. Sinking is kept out by disabling
+    -- gravity on the entity at spawn (it has collision off, so there is no
+    -- ground to rest on), not by freezing it.
     local inv = span > 0 and (1000.0 / span) or 0.0
     FreezeEntityPosition(GhostVeh, false)
+    SetEntityHasGravity(GhostVeh, false)     -- re-assert: nothing should pull it down
     SetEntityVelocity(GhostVeh,
         clampv((b.x - a.x) * inv), clampv((b.y - a.y) * inv), clampv((b.z - a.z) * inv))
 
@@ -268,6 +293,15 @@ local function ReplayMotion(m, elapsed)
     -- Cosmetic channel: front wheels actually turn, engine note matches.
     SetVehicleSteeringAngle(GhostVeh, a.steer or 0.0)
     SetVehicleCurrentRpm(GhostVeh, a.rpm or 0.0)
+
+    -- Per-wheel rotation replays real lockup under braking and wheelspin on
+    -- corner exit — velocity alone only ever gives spin proportional to speed.
+    if a.w and GC.applyWheels ~= false and RL_WheelsSupported() then
+        for i = 0, 3 do
+            local ws = a.w[i + 1]
+            if ws then RL_WheelSet(GhostVeh, i, ws) end
+        end
+    end
 
     local flags = a.flags or 0
     SetVehicleBrakeLights(GhostVeh, flags % 2 == 1)

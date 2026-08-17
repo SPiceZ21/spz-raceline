@@ -56,8 +56,9 @@ RegisterNetEvent("spz-raceline:submitCapture", function(track, payload)
 
     -- v2/v3 payload: { v = 2|3, m = modelHash, p = { x, y, z, state, t, ... }, c = splits? }
     -- v4 adds `r`: the fixed-rate motion stream the ghost replays.
-    if type(payload) ~= "table"
-       or (payload.v ~= 2 and payload.v ~= 3 and payload.v ~= 4) then return end
+    -- v5 adds `rf` (motion stride) and `s`: the vehicle spec header.
+    if type(payload) ~= "table" or type(payload.v) ~= "number"
+       or payload.v < 2 or payload.v > 5 then return end
     if type(payload.m) ~= "number" then return end
     local flat = payload.p
     if type(flat) ~= "table" then return end
@@ -81,24 +82,36 @@ RegisterNetEvent("spz-raceline:submitCapture", function(track, payload)
         if clean then splits = payload.c end
     end
 
-    -- v4 motion stream: flat 11-tuples (t,x,y,z,qx,qy,qz,qw,steer,rpm,flags).
+    -- Motion stream: flat tuples of `stride` numbers
+    -- (t,x,y,z,qx,qy,qz,qw,steer,rpm,flags[,w1..w4]).
     -- Rejected wholesale if malformed — the line still stores fine without it.
-    local motion = nil
+    local motion, stride = nil, nil
     if payload.v >= 4 and type(payload.r) == "table" then
-        local rn = #payload.r
-        local maxN = (Config.MaxMotionSamples or 7500) * 11
-        if rn >= 44 and rn % 11 == 0 and rn <= maxN then
-            local clean = true
-            for i = 1, rn do
-                if type(payload.r[i]) ~= "number" then clean = false; break end
+        local rf = (payload.v >= 5) and tonumber(payload.rf) or 11
+        if rf and rf >= 11 and rf <= 32 then
+            local rn   = #payload.r
+            local maxN = (Config.MaxMotionSamples or 7500) * rf
+            if rn >= rf * 4 and rn % rf == 0 and rn <= maxN then
+                local clean = true
+                for i = 1, rn do
+                    if type(payload.r[i]) ~= "number" then clean = false; break end
+                end
+                if clean then motion, stride = payload.r, rf end
             end
-            if clean then motion = payload.r end
         end
     end
 
+    -- Vehicle spec header — stored verbatim but only as a plain table, and only
+    -- alongside a valid motion stream.
+    local spec = (motion and payload.v >= 5 and type(payload.s) == "table") and payload.s or nil
+
     -- Normalise for storage (splits may be empty table for v2 upgrades)
-    local stored = { v = motion and 4 or 3, m = payload.m, p = flat, c = splits or {} }
-    if motion then stored.r = motion end
+    local stored = { v = motion and 5 or 3, m = payload.m, p = flat, c = splits or {} }
+    if motion then
+        stored.r  = motion
+        stored.rf = stride
+        stored.s  = spec
+    end
 
     -- Who holds this track's record BEFORE the write — to detect a steal.
     local prevRows = MySQL.query.await([[

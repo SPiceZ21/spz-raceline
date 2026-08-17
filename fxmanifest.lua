@@ -14,6 +14,7 @@ shared_scripts {
 
 client_scripts {
   'client/motion.lua',   -- must load first: defines RL_Mot* / RL_QuatSlerp
+  'client/vehspec.lua',  -- RL_SpecCapture / RL_SpecApply
   'client/main.lua',
   'client/ghost.lua',
   'client/coach.lua',
