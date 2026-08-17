@@ -38,6 +38,9 @@ local FadeStart = 0
 -- other files sharing this resource's environment.
 local BeginFadeIn, BeginFadeOut, TickFade
 
+-- Live ghost telemetry, derived from the replay spline (never stored).
+local GhostTel = { speed = 0.0, ms = 0.0, lon = 0.0, lat = 0.0, g = 0.0, latG = 0.0 }
+
 -- ── Route preparation ─────────────────────────────────────────────────────────
 
 local function BuildRoute(entry)
@@ -355,14 +358,43 @@ local function ReplayMotion(m, elapsed, cosmetic)
     -- Velocity from the spline tangent — the true instantaneous direction and
     -- speed along the curve, not a straight chord between samples.
     if dt > 0.0 then
-        SetEntityVelocity(GhostVeh,
-            clampv(RL_CatmullRomDeriv(p0.x, p1.x, p2.x, p3.x, f) / dt),
-            clampv(RL_CatmullRomDeriv(p0.y, p1.y, p2.y, p3.y, f) / dt),
-            clampv(RL_CatmullRomDeriv(p0.z, p1.z, p2.z, p3.z, f) / dt))
+        local vx = RL_CatmullRomDeriv(p0.x, p1.x, p2.x, p3.x, f) / dt
+        local vy = RL_CatmullRomDeriv(p0.y, p1.y, p2.y, p3.y, f) / dt
+        local vz = RL_CatmullRomDeriv(p0.z, p1.z, p2.z, p3.z, f) / dt
+
+        SetEntityVelocity(GhostVeh, clampv(vx), clampv(vy), clampv(vz))
 
         local wx, wy, wz = RL_QuatAngularVelocity(
             p1.qx, p1.qy, p1.qz, p1.qw, p2.qx, p2.qy, p2.qz, p2.qw, dt)
         SetEntityAngularVelocity(GhostVeh, wx, wy, wz)
+
+        -- Telemetry, taken from the same spline the car is being driven along, so
+        -- it can never disagree with what you see. Nothing extra is stored:
+        -- velocity is the first derivative, acceleration the second.
+        local d2 = dt * dt
+        local ax = RL_CatmullRomDeriv2(p0.x, p1.x, p2.x, p3.x, f) / d2
+        local ay = RL_CatmullRomDeriv2(p0.y, p1.y, p2.y, p3.y, f) / d2
+        local az = RL_CatmullRomDeriv2(p0.z, p1.z, p2.z, p3.z, f) / d2
+
+        local speed = math.sqrt(vx * vx + vy * vy + vz * vz)   -- m/s
+        local lon, lat = 0.0, 0.0
+        if speed > 0.1 then
+            -- Split acceleration into "along the direction of travel" (throttle /
+            -- braking) and "across it" (cornering load) — the two a driver feels.
+            local ux, uy, uz = vx / speed, vy / speed, vz / speed
+            lon = ax * ux + ay * uy + az * uz
+            local px, py, pz = ax - ux * lon, ay - uy * lon, az - uz * lon
+            lat = math.sqrt(px * px + py * py + pz * pz)
+        end
+
+        GhostTel.speed = speed * 3.6      -- km/h
+        GhostTel.ms    = speed
+        GhostTel.lon   = lon              -- m/s²  (+ accelerating, − braking)
+        GhostTel.lat   = lat              -- m/s²  cornering
+        GhostTel.g     = lon / 9.81
+        GhostTel.latG  = lat / 9.81
+        GhostTel.rpm   = p1.rpm or 0
+        GhostTel.gear  = p1.gear
     end
 
     SetEntityCoordsNoOffset(GhostVeh, x, y, z, false, false, false)
@@ -542,3 +574,75 @@ function RL_GhostSetMode(mode)
     end
     return GhostMode
 end
+
+-- ── Telemetry access ─────────────────────────────────────────────────────────
+-- Speed / acceleration of the ghost right now, derived from the replay spline.
+-- Nothing is stored for these: velocity is the spline's first derivative and
+-- acceleration its second, so they always agree with the path being driven.
+--   speed km/h · ms m/s · lon m/s² (+throttle / −brake) · lat m/s² cornering
+--   g / latG    the same in G · rpm 0..1 · gear
+exports('GetGhostTelemetry', function()
+    if not Running then return nil end
+    return {
+        speed = GhostTel.speed, ms   = GhostTel.ms,
+        lon   = GhostTel.lon,   lat  = GhostTel.lat,
+        g     = GhostTel.g,     latG = GhostTel.latG,
+        rpm   = GhostTel.rpm,   gear = GhostTel.gear,
+    }
+end)
+
+-- ── Diagnostic ───────────────────────────────────────────────────────────────
+-- Answers "why does the ghost feel like it runs at a constant pace?". Prints
+-- which replay path is live and the actual speed profile of the loaded lap: a
+-- flat min/max here means the DATA is constant-pace, not the renderer.
+RegisterCommand('ghostinfo', function()
+    local entry = ResolveEntry and ResolveEntry()
+    if not entry then
+        print('[ghost] no line loaded for this track (mode: ' .. tostring(GhostMode) .. ')')
+        return
+    end
+
+    local r = BuildRoute(entry)
+    if not r then print('[ghost] line too short to replay') return end
+
+    print(('[ghost] mode=%s  motion=%s  points=%d  lapMs=%s')
+        :format(tostring(GhostMode), r.motion and ('yes (' .. #r.motion .. ' samples)') or 'NO',
+                #r.pts, tostring(entry.best)))
+
+    if not r.motion then
+        local timed = r.pts[1].t ~= nil and r.pts[#r.pts].t ~= nil and r.pts[#r.pts].t > 0
+        print(('[ghost] legacy line — per-point timing: %s')
+            :format(timed and 'yes' or 'NO -> distance-proportional CONSTANT PACE'))
+    end
+
+    -- Speed profile straight off the spline the replay uses.
+    local src = r.motion
+    if not src then
+        src = {}
+        for i, p in ipairs(r.pts) do src[i] = { x = p.x, y = p.y, z = p.z, t = r.times[i] } end
+    end
+
+    local n, minS, maxS, sum, cnt = #src, math.huge, -math.huge, 0.0, 0
+    local marks = {}
+    for i = 2, n do
+        local dtt = ((src[i].t or 0) - (src[i-1].t or 0)) / 1000.0
+        if dtt > 0 then
+            local dx = src[i].x - src[i-1].x
+            local dy = src[i].y - src[i-1].y
+            local dz = (src[i].z or 0) - (src[i-1].z or 0)
+            local kmh = math.sqrt(dx*dx + dy*dy + dz*dz) / dtt * 3.6
+            if kmh < minS then minS = kmh end
+            if kmh > maxS then maxS = kmh end
+            sum, cnt = sum + kmh, cnt + 1
+            if #marks < 10 and (i % math.max(1, math.floor(n / 10)) == 0) then
+                marks[#marks + 1] = ('%.0f'):format(kmh)
+            end
+        end
+    end
+
+    if cnt == 0 then print('[ghost] no usable timing in the line') return end
+    print(('[ghost] speed km/h  min=%.0f  max=%.0f  avg=%.0f  spread=%.0f')
+        :format(minS, maxS, sum / cnt, maxS - minS))
+    print('[ghost] profile: ' .. table.concat(marks, ' '))
+    print('[ghost] a spread near 0 means the stored lap itself is constant pace')
+end, false)

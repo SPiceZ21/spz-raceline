@@ -154,6 +154,18 @@ function RL_CatmullRomDeriv(p0, p1, p2, p3, t)
         + 3.0 * (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t2)
 end
 
+--- d²/dt² — acceleration along the spline.
+---
+--- Speed and acceleration are NOT recorded: they are already implied by the
+--- position curve, so storing them would be redundant bytes that could also
+--- disagree with the path. Taking them analytically from the same spline the car
+--- is driven along means they always match what you see, and differencing
+--- frame-to-frame speeds (the obvious alternative) would be full of noise.
+function RL_CatmullRomDeriv2(p0, p1, p2, p3, t)
+    return 0.5 * (2.0 * (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3)
+        + 6.0 * (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t)
+end
+
 -- ── Capture ───────────────────────────────────────────────────────────────────
 
 function RL_MotReset()
