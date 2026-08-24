@@ -47,7 +47,7 @@ Config.Ghost = {
     enabled       = true,
     alpha         = 150,       -- 0-255 ghost transparency
     zLift         = 0.45,      -- points are at road height; lift to axle height
-    fallbackModel = `sultan`,  -- used when the line predates model capture (v1)
+    fallbackModel = 'sultan',  -- used when the line predates model capture (v1)
     headingLerp   = 10.0,      -- yaw smoothing factor (higher = snappier)
 
     -- Rebuild the ghost as the car that set the lap (paint, mods, wheels).
