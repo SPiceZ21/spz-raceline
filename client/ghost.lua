@@ -314,6 +314,27 @@ TickFade = function()
     end
 end
 
+-- ── Rewind ────────────────────────────────────────────────────────────────────
+-- The player's lap clock rewinds with their car, so the ghost — which exists
+-- only to say "here is where you were at this point in the lap" — has to rewind
+-- with it. If it kept running forward it would be comparing your rewound lap
+-- against a clock that never stopped, and every rewind would hand it a lead you
+-- never lost.
+--
+-- Live scrub: subtracted per frame, so the ghost visibly reverses alongside you.
+-- Landing: folded into RunStart once, and the live figure drops back to 0.
+
+local function RewindCreditMs()
+    if GetResourceState("spz-races") ~= "started" then return 0 end
+    return exports["spz-races"]:GetRewindCreditMs() or 0
+end
+
+AddEventHandler("SPZ:rewind:applied", function(ms)
+    ms = tonumber(ms) or 0
+    if ms <= 0 or not Running then return end
+    RunStart = math.min(RunStart + ms, GetGameTimer())
+end)
+
 --- Returns false once the recorded lap has run out.
 --- `cosmetic` false = far away, transform only (see LOD note below).
 local function ReplayMotion(m, elapsed, cosmetic)
@@ -321,6 +342,13 @@ local function ReplayMotion(m, elapsed, cosmetic)
 
     while MotCursor < n - 1 and m[MotCursor + 1].t <= elapsed do
         MotCursor = MotCursor + 1
+    end
+    -- ...and back again. The cursor used to be strictly monotonic, which is
+    -- correct for a lap that only ever runs forward; a rewind moves `elapsed`
+    -- backward, and a cursor left ahead of it would interpolate off the end of
+    -- the wrong segment.
+    while MotCursor > 1 and m[MotCursor].t > elapsed do
+        MotCursor = MotCursor - 1
     end
 
     if elapsed >= m[n].t then return false end
@@ -450,7 +478,9 @@ end
 CreateThread(function()
     while true do
         if Running and GhostVeh ~= 0 and DoesEntityExist(GhostVeh) then
-            local elapsed = GetGameTimer() - RunStart
+            -- Lap clock, minus the scrub currently in progress: the ghost runs
+            -- backward while you rewind and picks up from the same moment you do.
+            local elapsed = math.max(0, GetGameTimer() - RunStart - RewindCreditMs())
 
             -- v4 motion stream when the lap has one; otherwise the legacy line.
             if Route.motion then
@@ -464,6 +494,10 @@ CreateThread(function()
 
                 if not ReplayMotion(Route.motion, elapsed, cosmetic) then
                     BeginFadeOut()
+                elseif FadeDir == -1 then
+                    -- A rewind pulled the clock back inside the lap after the
+                    -- ghost had started to leave: it has a lap to run again.
+                    BeginFadeIn()
                 end
                 TickFade()
                 Wait(far and 50 or 0)
@@ -473,15 +507,23 @@ CreateThread(function()
             local pts, times = Route.pts, Route.times
             local n = #pts
 
-            -- advance the cursor (monotonic; never scans the whole array)
+            -- Walk the cursor to the segment holding `elapsed` — forward
+            -- normally, backward when a rewind moves the clock back. Either way
+            -- it steps from where it was, so it never scans the whole array.
             while Cursor < n - 1 and times[Cursor + 1] <= elapsed do
                 Cursor = Cursor + 1
+            end
+            while Cursor > 1 and times[Cursor] > elapsed do
+                Cursor = Cursor - 1
             end
 
             if elapsed >= times[n] then
                 -- Ghost lap done: fade out, same as the motion path.
                 BeginFadeOut()
             else
+                -- Rewound back inside the lap while leaving: come back.
+                if FadeDir == -1 then BeginFadeIn() end
+
                 local a, b   = pts[Cursor], pts[Cursor + 1]
                 local ta, tb = times[Cursor], times[Cursor + 1]
                 local span   = tb - ta

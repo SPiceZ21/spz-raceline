@@ -222,6 +222,22 @@ function RL_MotSample(veh, tMs, brake, handbrake)
     }
 end
 
+--- Drop every sample newer than `maxT` (ms since lap start) from the running
+--- buffer. Used when a rewind scrubs the car back: the samples after the
+--- landing point describe driving that no longer happened, and leaving them in
+--- would replay the ghost through a stretch the player un-drove.
+--- Samples are appended in time order, so this only ever pops off the tail.
+function RL_MotTrim(maxT)
+    maxT = tonumber(maxT)
+    if not maxT then return 0 end
+    local dropped = 0
+    while #Buf > 0 and (Buf[#Buf].t or 0) > maxT do
+        Buf[#Buf] = nil
+        dropped = dropped + 1
+    end
+    return dropped
+end
+
 --- Freeze the running buffer as the completed lap and start a fresh one.
 function RL_MotFreeze()
     Frozen = Buf

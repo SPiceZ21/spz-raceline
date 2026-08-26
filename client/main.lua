@@ -249,13 +249,30 @@ local function GroundedZ(pos)
     return pos.z - 0.3   -- roughly wheel height when collision is not loaded
 end
 
+-- ── Rewind awareness ──────────────────────────────────────────────────────────
+-- While the car is being scrubbed backward by spz-races' rewind it is not being
+-- driven: sampling it would write the scrub itself into the lap — a line that
+-- runs backward down the road at 2.5x, and a ghost that replays it.
+-- So capture pauses for the scrub, and the samples covering the un-driven
+-- stretch are dropped when it lands (see the SPZ:rewind:applied handler).
+
+local function RewindActive()
+    if GetResourceState("spz-races") ~= "started" then return false end
+    return exports["spz-races"]:IsRewinding()
+end
+
 CreateThread(function()
     local lastX, lastY
     while true do
         -- 40 ms while capturing = 25 Hz motion sampling (see client/motion.lua).
         Wait(Capturing and (Config.MotionIntervalMs or 40) or 400)
 
-        if Capturing then
+        if Capturing and RewindActive() then
+            -- Scrubbing: record nothing, and forget the last sampled position so
+            -- the first frame after the landing is not gated against a point the
+            -- car has since moved away from.
+            lastX, lastY = nil, nil
+        elseif Capturing then
             local ped = PlayerPedId()
             local veh = GetVehiclePedIsIn(ped, false)
 
@@ -294,6 +311,41 @@ CreateThread(function()
             lastX, lastY = nil, nil
         end
     end
+end)
+
+-- A rewind landed: the lap clock was handed `ms` back, so the capture follows.
+-- Two halves, both required for the stored line to describe a lap that was
+-- actually driven:
+--   • trim — everything recorded after the landing moment is un-driven now
+--   • shift — CapStart moves forward by the same ms, so the `t` of every future
+--             sample stays on the same epoch as the (rewound) lap clock, which
+--             is what the ghost replays against
+AddEventHandler("SPZ:rewind:applied", function(ms, rewoundMs)
+    ms = tonumber(ms) or 0
+    if ms <= 0 or not Capturing or CapStart == 0 then return end
+
+    -- Trim against the TRUE distance scrubbed, shift the clock by the CREDITED
+    -- amount. They are the same number at the default full refund; with a
+    -- partial refund the trim still has to remove every sample the car un-drove,
+    -- or the stored line would contain road that was driven twice.
+    local rewound  = math.max(ms, tonumber(rewoundMs) or ms)
+    local landedAt = math.max(0, (GetGameTimer() - CapStart) - rewound)
+
+    while #Cap > 0 and (Cap[#Cap].t or 0) > landedAt do
+        Cap[#Cap] = nil
+    end
+    if Config.MotionCapture ~= false and RL_MotTrim then
+        RL_MotTrim(landedAt)
+    end
+
+    -- Splits for gates the player has just un-crossed go with them; the server
+    -- re-arms those checkpoints, so they will be recorded again on the way back
+    -- through.
+    for idx, t in pairs(CapSplits) do
+        if t > landedAt then CapSplits[idx] = nil end
+    end
+
+    CapStart = math.min(CapStart + ms, GetGameTimer())
 end)
 
 -- Freeze the current capture as the last completed lap.
