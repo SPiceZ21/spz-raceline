@@ -75,6 +75,44 @@ function RL_WheelSet(veh, index, speed)
     if WheelSet then WheelSet(veh, index, speed) end
 end
 
+-- ── Driving wheels without recorded data ──────────────────────────────────────
+-- Replay needs the wheels to turn even when the lap carries no per-wheel data
+-- (a v4 line, or a build that could not READ wheel speeds when it recorded).
+-- Playback only needs a SETTER, so one is resolved on its own here — pairing it
+-- with a getter, as above, meant a build that can write but not read spun the
+-- ghost's wheels not at all.
+--
+-- Ghosts have collision off and are positioned by hand every frame, so their
+-- wheels never touch ground: nothing rolls them, and velocity alone cannot
+-- (rotation comes from contact). They have to be driven explicitly.
+local DriveSet, DriveUnit
+
+do
+    local rads = rawget(_G, 'SetVehicleWheelRotationSpeed')   -- rad/s
+    local mps  = rawget(_G, 'SetVehicleWheelSpeed')           -- m/s
+    if type(rads) == 'function' then
+        DriveSet, DriveUnit = rads, 'rads'
+    elseif type(mps) == 'function' then
+        DriveSet, DriveUnit = mps, 'mps'
+    end
+end
+
+local WHEEL_RADIUS = 0.35   -- metres; close enough for every road car
+
+function RL_WheelDriveSupported()
+    return DriveSet ~= nil
+end
+
+--- Spin every wheel as though the car were rolling at `mps` metres per second.
+function RL_WheelDrive(veh, mps)
+    if not DriveSet then return end
+    local value = (DriveUnit == 'rads') and (mps / WHEEL_RADIUS) or mps
+    local n = math.min(GetVehicleNumberOfWheels(veh) or 4, MAX_WHEELS)
+    for i = 0, n - 1 do
+        pcall(DriveSet, veh, i, value)
+    end
+end
+
 -- ── Quaternion helpers ────────────────────────────────────────────────────────
 
 --- Shortest-arc spherical interpolation between two unit quaternions.

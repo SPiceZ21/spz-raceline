@@ -451,6 +451,13 @@ local function ReplayMotion(m, elapsed, cosmetic)
             local ws = p1.w[i + 1]
             if ws then RL_WheelSet(GhostVeh, i, lerp(ws, w2[i + 1], f)) end
         end
+    else
+        -- No recorded wheel data (or a build that could not read it when this
+        -- lap was driven): drive the wheels off the replay's own speed instead.
+        -- A ghost has collision off and is placed by hand every frame, so its
+        -- wheels never touch ground — without this they sit dead still while the
+        -- car flies down the road.
+        RL_WheelDrive(GhostVeh, GhostTel.ms or 0.0)
     end
 
     -- Gear drives the tacho and the shift points in the engine note (and puts
@@ -543,9 +550,13 @@ CreateThread(function()
                 -- lag spike (tiny span) can't fling a huge one-frame velocity.
                 local inv = span > 0 and (1000.0 / span) or 0.0   -- ms → per-second
                 local function clampv(v) return math.max(-120.0, math.min(120.0, v)) end
+                local vx, vy, vz = clampv((b.x - a.x) * inv), clampv((b.y - a.y) * inv), clampv((b.z - a.z) * inv)
                 FreezeEntityPosition(GhostVeh, false)
-                SetEntityVelocity(GhostVeh,
-                    clampv((b.x - a.x) * inv), clampv((b.y - a.y) * inv), clampv((b.z - a.z) * inv))
+                SetEntityVelocity(GhostVeh, vx, vy, vz)
+
+                -- Velocity does not turn wheels on a car with no ground under it
+                -- (see the motion path): drive them from the segment speed.
+                RL_WheelDrive(GhostVeh, math.sqrt(vx * vx + vy * vy + vz * vz))
 
                 SetEntityCoordsNoOffset(GhostVeh, x, y, z, false, false, false)
                 SetEntityHeading(GhostVeh, CurHeading)
