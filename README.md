@@ -13,6 +13,9 @@ coasting. In time trials it also replays that lap as a translucent ghost car.
 - **Automatic capture** — every race and time-trial lap is recorded silently. A lap is
   stored (per player, per track) only when it beats your stored best; slower laps never
   overwrite. Times are server-measured by `spz-races`; the client supplies points only.
+- **Rewound laps are never stored.** `spz-races` withholds `spz-raceline:lapCompleted` for
+  any lap that won clock back off a rewind. Stored lines are replayed as ghost-bots and
+  used as duel targets, so a refunded lap would seed a ghost nobody can beat.
 - **Closed loops** — circuit captures run through the final-checkpoint → start-line
   stretch, and any residual seam is bridged with interpolated points at display time
   (`Config.LoopCloseRange`).
