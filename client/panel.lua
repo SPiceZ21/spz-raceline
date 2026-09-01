@@ -343,12 +343,12 @@ lib.registerRadial({
     },
 })
 
-lib.addRadialItem({
-    id    = 'spz_raceline',
-    icon  = 'road',
-    label = 'Raceline',
-    menu  = RADIAL,
-})
+-- The ROOT entry that opens this ring is added by spz-core's radial (Racing →
+-- Raceline), not here. spz-core rebuilds the root on every race-state change
+-- with lib.clearRadialItems(), which drops root items belonging to any
+-- resource — an entry added here survived only until the next state change,
+-- which is why the menu appeared to vanish and leave a bare toggle behind.
+-- Submenus are not cleared, so registering the ring above is enough.
 
 -- ── Entry points ──────────────────────────────────────────────────────────────
 

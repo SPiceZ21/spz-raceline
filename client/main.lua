@@ -547,8 +547,11 @@ RegisterNetEvent("spz-raceline:line", function(track, data, bestMs)
     LineCache[track] = { points = pts, best = bestMs, model = model,
                          splits = splits, motion = motion, spec = spec }
 
-    if (TTTrack == track or RaceTrack == track or PendingLoad == track)
-       and (TTTrack == track or RaceTrack == track) then
+    -- The second half of this test used to repeat the first, which made
+    -- PendingLoad dead weight: a line fetched by any path other than "I am
+    -- currently racing this track" arrived, cached, and was never shown. The
+    -- pending token IS the request — if we asked for this track, display it.
+    if TTTrack == track or RaceTrack == track or PendingLoad == track then
         PendingLoad = nil
         LoadDisplay(track)
     end
@@ -641,6 +644,16 @@ end)
 local function SetVisible(on)
     Visible = on
     if not on then Quads = {} end
+
+    -- Switching the display on with an empty buffer draws nothing, and used to
+    -- say "ON" anyway — which reads as a broken feature rather than as "there is
+    -- no stored lap for this track yet". The line only exists once you have set
+    -- a time on the track you are standing on.
+    if on and Count == 0 then
+        Notify("Raceline: display ~g~ON~s~ — no line loaded yet for this track")
+        return
+    end
+
     Notify(on and "Raceline: display ~g~ON~s~" or "Raceline: display ~r~OFF~s~")
 end
 
