@@ -97,8 +97,14 @@ local function DeleteGhost()
     GhostVeh = 0
 end
 
+-- Whether the ghost gets a map blip at all. Off is a legitimate preference: the
+-- blip is a spoiler on a sprint, it tells you where the reference lap is before
+-- you can see it. Read here rather than at spawn so toggling it mid-run works.
+local ShowBlip = true
+
 -- Map blip attached to the ghost car (purple, matches its "reference" role).
 local function AddGhostBlip()
+    if not ShowBlip then return end
     if GhostVeh == 0 or not DoesEntityExist(GhostVeh) then return end
     RemoveGhostBlip()
     GhostBlip = AddBlipForEntity(GhostVeh)
@@ -494,7 +500,7 @@ CreateThread(function()
                 -- LOD by distance from the player. A ghost you are racing is
                 -- right next to you; one half a lap away only needs to be in the
                 -- right place, so drop its cosmetic natives and tick it less
-                -- often. Keeps a field of replayed bots affordable.
+                -- often. Keeps a replayed ghost affordable at any distance.
                 local d = #(GetEntityCoords(PlayerPedId()) - GetEntityCoords(GhostVeh))
                 local cosmetic = d < (GC.lodDistance or 70.0)
                 local far      = d > (GC.farDistance or 160.0)
@@ -626,6 +632,117 @@ function RL_GhostSetMode(mode)
         RL_GetRecordEntry(TTTrack)   -- kick off the async fetch now
     end
     return GhostMode
+end
+
+-- ── Panel accessors ──────────────────────────────────────────────────────────
+--
+-- The control panel (client/panel.lua) lives in this same resource environment,
+-- so it reads and writes ghost state through these globals rather than through
+-- exports — an export round-trip to yourself is a serialisation for nothing.
+--
+-- Everything here is a SETTER as well as a getter on purpose: a panel that can
+-- only report state is a status screen, and the whole point is that the driver
+-- can change these between laps without leaving the car for a chat command.
+
+function RL_GhostIsOn() return GhostOn end
+
+function RL_GhostSetOn(on)
+    GhostOn = on and true or false
+    if not GhostOn then DeleteGhost() end
+    return GhostOn
+end
+
+function RL_GhostGetMode() return GhostMode end
+
+function RL_GhostIsRunning() return Running end
+
+function RL_GhostGetTrack() return TTTrack end
+
+--- Ghost transparency, applied live. Skipped while a fade is in flight — the
+--- fade owns the alpha channel for those few hundred ms and would immediately
+--- overwrite anything set here.
+function RL_GhostSetAlpha(a)
+    a = math.max(20, math.min(255, math.floor(tonumber(a) or 150)))
+    GC.alpha = a
+    if GhostVeh ~= 0 and DoesEntityExist(GhostVeh) and FadeDir == 0 then
+        SetEntityAlpha(GhostVeh, a, false)
+    end
+    return a
+end
+
+function RL_GhostGetAlpha() return GC.alpha or 150 end
+
+function RL_GhostBlipEnabled() return ShowBlip end
+
+function RL_GhostSetBlip(on)
+    ShowBlip = on and true or false
+    if ShowBlip then
+        if Running then AddGhostBlip() end
+    else
+        RemoveGhostBlip()
+    end
+    return ShowBlip
+end
+
+--- Everything the panel needs to describe the ghost in one call.
+function RL_GhostStatus()
+    return {
+        on      = GhostOn,
+        mode    = GhostMode,
+        running = Running,
+        track   = TTTrack,
+        blip    = ShowBlip,
+        alpha   = GC.alpha or 150,
+        spec    = GC.applySpec  ~= false,
+        wheels  = GC.applyWheels ~= false,
+        -- Is there actually a lap to replay in the current mode? "Ghost is on"
+        -- and "a ghost will appear" are different answers and the panel says so.
+        hasLine = (TTTrack ~= nil) and (ResolveEntry() ~= nil) or false,
+    }
+end
+
+--- The ghostinfo diagnostic, as data instead of console prints, so the panel can
+--- show the answer to "why is my ghost pacing flat" in game.
+function RL_GhostDiagnostics()
+    local entry = ResolveEntry()
+    if not entry then return nil end
+
+    local r = BuildRoute(entry)
+    if not r then return nil end
+
+    local src = r.motion
+    if not src then
+        src = {}
+        for i, p in ipairs(r.pts) do src[i] = { x = p.x, y = p.y, z = p.z, t = r.times[i] } end
+    end
+
+    local minS, maxS, sum, cnt = math.huge, -math.huge, 0.0, 0
+    for i = 2, #src do
+        local dtt = ((src[i].t or 0) - (src[i-1].t or 0)) / 1000.0
+        if dtt > 0 then
+            local dx = src[i].x - src[i-1].x
+            local dy = src[i].y - src[i-1].y
+            local dz = (src[i].z or 0) - (src[i-1].z or 0)
+            local kmh = math.sqrt(dx*dx + dy*dy + dz*dz) / dtt * 3.6
+            if kmh < minS then minS = kmh end
+            if kmh > maxS then maxS = kmh end
+            sum, cnt = sum + kmh, cnt + 1
+        end
+    end
+
+    if cnt == 0 then return nil end
+
+    return {
+        mode    = GhostMode,
+        motion  = r.motion and #r.motion or nil,
+        points  = #r.pts,
+        lapMs   = entry.best,
+        holder  = entry.holder,
+        minKmh  = minS,
+        maxKmh  = maxS,
+        avgKmh  = sum / cnt,
+        spread  = maxS - minS,
+    }
 end
 
 -- ── Telemetry access ─────────────────────────────────────────────────────────

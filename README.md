@@ -14,8 +14,8 @@ coasting. In time trials it also replays that lap as a translucent ghost car.
   stored (per player, per track) only when it beats your stored best; slower laps never
   overwrite. Times are server-measured by `spz-races`; the client supplies points only.
 - **Rewound laps are never stored.** `spz-races` withholds `spz-raceline:lapCompleted` for
-  any lap that won clock back off a rewind. Stored lines are replayed as ghost-bots and
-  used as duel targets, so a refunded lap would seed a ghost nobody can beat.
+  any lap that won clock back off a rewind. Stored lines are replayed as the time-trial
+  ghost and used as duel targets, so a refunded lap would seed a ghost nobody can beat.
 - **Closed loops** — circuit captures run through the final-checkpoint → start-line
   stretch, and any residual seam is bridged with interpolated points at display time
   (`Config.LoopCloseRange`).
@@ -53,7 +53,7 @@ coasting. In time trials it also replays that lap as a translucent ghost car.
 | Server | `server/main.lua` | Line persistence and best-lap gating |
 | Server | `server/crown.lua` | Track crown ownership |
 | Server | `server/tax.lua` | Crown tax rules |
-| Server | `server/botlines.lua` | Bot reference lines |
+| Server | `server/duellines.lua` | Stored lines for ghost duels |
 
 ## Commands
 
@@ -74,7 +74,7 @@ coasting. In time trials it also replays that lap as a translucent ghost car.
 | `SetLineVisible(bool)` · `IsLineVisible()` | Display toggle |
 | `GetLine()` · `LoadLine(points)` · `ClearLine()` | Read or replace the displayed line |
 | `GetLineByPlayerId(id)` | Fetch another player's stored line |
-| `GetBotLines()` | Reference lines for bots |
+| `GetLineByPlayerId()` | A player's stored line for a track (ghost duels) |
 | `GetRecordSummary()` | Track record summary |
 | `PublishCrown()` | Publish track crown ownership |
 

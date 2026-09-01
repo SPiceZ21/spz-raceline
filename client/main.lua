@@ -664,8 +664,13 @@ RegisterCommand("raceline", function(_, args)
             local on = RL_GhostToggle and RL_GhostToggle()
             Notify(on and "Raceline: ghost car ~g~ON~s~" or "Raceline: ghost car ~r~OFF~s~")
         end
+    elseif sub == "panel" or sub == "" then
+        -- No arguments now opens the control panel (client/panel.lua) instead of
+        -- printing a usage line. The subcommands stay: they are what scripts,
+        -- keybinds and muscle memory already use.
+        if RL_OpenPanel then RL_OpenPanel() else Notify("Raceline: panel unavailable") end
     else
-        Notify("Usage: /raceline show | hide | ghost [pb|record|pace]")
+        Notify("Usage: /raceline panel | show | hide | ghost [pb|record|pace]")
     end
 end, false)
 
@@ -701,6 +706,33 @@ exports("LoadLine", function(pts)
     AutoShown, LoadedTrack = false, nil
     return Count > 0
 end)
+
+-- ── Panel accessors (same-resource globals, read by panel.lua) ──────────────
+
+function RL_SetLineVisible(on)
+    SetVisible(on and true or false)
+    return Visible
+end
+
+function RL_LineVisible() return Visible end
+
+--- One call describing the line: whether it is drawn, how much of it there is,
+--- and which track it belongs to. "Display is ON" with an empty buffer looks
+--- identical on screen to "display is OFF", so the panel reports both.
+function RL_LineStatus()
+    return {
+        visible = Visible,
+        points  = Count,
+        track   = LoadedTrack,
+        auto    = AutoShown,
+        best    = LoadedTrack and LineCache[LoadedTrack] and LineCache[LoadedTrack].best or nil,
+    }
+end
+
+function RL_ClearDisplay()
+    ClearLine()
+    AutoShown, LoadedTrack = false, nil
+end
 
 -- ── Ghost accessors (same-resource globals, read by ghost.lua) ──────────────
 function RL_GetEntry(track)

@@ -19,6 +19,7 @@ client_scripts {
   'client/main.lua',
   'client/ghost.lua',
   'client/crown.lua',
+  'client/panel.lua',       -- ox_lib control panel + radial (needs the RL_* accessors above)
 }
 
 server_scripts {
@@ -26,7 +27,7 @@ server_scripts {
   'server/main.lua',
   'server/crown.lua',
   'server/tax.lua',
-  'server/botlines.lua',
+  'server/duellines.lua',
 }
 
 dependencies {
