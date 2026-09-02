@@ -37,6 +37,8 @@ AddEventHandler("spz-raceline:lapCompleted", function(src, trackName, lapTimeMs)
     if type(trackName) ~= "string" or type(lapTimeMs) ~= "number" or lapTimeMs <= 0 then
         print(("^3[raceline] Ignoring lap from %s: bad payload (track=%s time=%s).^7")
             :format(tostring(src), tostring(trackName), tostring(lapTimeMs)))
+        TriggerClientEvent("spz-raceline:lapVerdict", src, tostring(trackName),
+            "bad payload — spz-races sent a lap this resource cannot read")
         return
     end
 
@@ -62,6 +64,11 @@ AddEventHandler("spz-raceline:lapCompleted", function(src, trackName, lapTimeMs)
 
     print(("^2[raceline] %s: %d ms beats %s — asking client %s for its line.^7")
         :format(trackName, lapTimeMs, best and (best .. " ms") or "no stored line", tostring(src)))
+    -- The accepted path is reported too. Only ever announcing rejections means
+    -- silence is ambiguous: it could be "nothing was wrong" or "nothing ran".
+    TriggerClientEvent("spz-raceline:lapVerdict", src, trackName,
+        ("%d ms beats %s — requesting your line")
+            :format(lapTimeMs, best and (best .. " ms") or "no stored line"))
 
     Pending[src] = { track = trackName, ms = lapTimeMs, pid = pid, expires = GetGameTimer() + 30000 }
     TriggerClientEvent("spz-raceline:requestCapture", src, trackName)
