@@ -503,9 +503,15 @@ end)
 
 RegisterNetEvent("spz-raceline:requestCapture", function(track)
     if LastLapReady and #LastLap > 1 then
+        print(("^2[raceline] Submitting %d captured points for %s.^7"):format(#LastLap, tostring(track)))
         TriggerLatentServerEvent("spz-raceline:submitCapture", 200000,
             track, FlattenLine(LastLap, LastLapSplits))
     else
+        -- Worth saying out loud: an empty capture here is the difference
+        -- between "the lap was not quick enough" and "the recorder was never
+        -- running", and those have completely different causes.
+        print(("^3[raceline] No frozen lap to submit for %s (ready=%s points=%d capturing=%s) — deferring.^7")
+            :format(tostring(track), tostring(LastLapReady), #LastLap, tostring(Capturing)))
         -- Circuit TT: the improved lap's loop hasn't closed yet (player is
         -- still driving final CP → start line). FreezeLap submits it then.
         SubmitTrack = track
@@ -746,6 +752,32 @@ function RL_ClearDisplay()
     ClearLine()
     AutoShown, LoadedTrack = false, nil
 end
+
+-- /rlstatus — the whole client-side picture in one print.
+--
+-- Every stage of this system fails quietly by design (a lap that is not quicker
+-- is SUPPOSED to do nothing), which makes "the raceline is not working"
+-- genuinely hard to place: not recording, recorded but not submitted, stored
+-- but not fetched, and fetched but not drawn all look the same from the seat.
+RegisterCommand("rlstatus", function()
+    print("^5── raceline status ─────────────────────────────^7")
+    print(("  in race         : %s   (track: %s)"):format(tostring(InRace), tostring(RaceTrack)))
+    print(("  time trial      : %s   (track: %s)"):format(tostring(TTTrack ~= nil), tostring(TTTrack)))
+    print(("  capturing now   : %s   (%d points this lap)"):format(tostring(Capturing), #Cap))
+    print(("  frozen lap      : ready=%s points=%d"):format(tostring(LastLapReady), #LastLap))
+    print(("  pending submit  : %s"):format(tostring(SubmitTrack)))
+    print(("  display         : visible=%s points=%d track=%s auto=%s")
+        :format(tostring(Visible), Count, tostring(LoadedTrack), tostring(AutoShown)))
+
+    local n = 0
+    for track, entry in pairs(LineCache) do
+        n = n + 1
+        print(("  cached line     : %s — %s, %d points")
+            :format(track, FmtMs(entry.best or 0), entry.points and #entry.points or 0))
+    end
+    if n == 0 then print("  cached line     : none — nothing has been fetched or stored yet") end
+    print("^5────────────────────────────────────────────────^7")
+end, false)
 
 -- ── Ghost accessors (same-resource globals, read by ghost.lua) ──────────────
 function RL_GetEntry(track)

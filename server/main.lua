@@ -30,17 +30,35 @@ end
 -- ── Lap completed (server-local event, fired by spz-races for both races and
 --    time trials — timetrail.lua and checkpoints.lua)
 
+-- Every rejection below used to be a bare `return`, which made a line that
+-- never got stored indistinguishable from one the system never heard about —
+-- the whole chain failed in silence. Each exit now says why.
 AddEventHandler("spz-raceline:lapCompleted", function(src, trackName, lapTimeMs)
-    if type(trackName) ~= "string" or type(lapTimeMs) ~= "number" or lapTimeMs <= 0 then return end
+    if type(trackName) ~= "string" or type(lapTimeMs) ~= "number" or lapTimeMs <= 0 then
+        print(("^3[raceline] Ignoring lap from %s: bad payload (track=%s time=%s).^7")
+            :format(tostring(src), tostring(trackName), tostring(lapTimeMs)))
+        return
+    end
 
     local pid = PlayerDbId(src)
-    if not pid then return end
+    if not pid then
+        print(("^3[raceline] No spz-identity profile for source %s — lap on %s not stored.^7")
+            :format(tostring(src), trackName))
+        return
+    end
 
     local best = MySQL.scalar.await(
         "SELECT best_ms FROM racelines WHERE player_id = ? AND track = ? LIMIT 1",
         { pid, trackName }
     )
-    if best and lapTimeMs >= best then return end   -- no improvement: keep the old line
+    if best and lapTimeMs >= best then
+        print(("^3[raceline] %s: %d ms does not beat stored %d ms — keeping the old line.^7")
+            :format(trackName, lapTimeMs, best))
+        return
+    end
+
+    print(("^2[raceline] %s: %d ms beats %s — asking client %s for its line.^7")
+        :format(trackName, lapTimeMs, best and (best .. " ms") or "no stored line", tostring(src)))
 
     Pending[src] = { track = trackName, ms = lapTimeMs, pid = pid, expires = GetGameTimer() + 30000 }
     TriggerClientEvent("spz-raceline:requestCapture", src, trackName)
