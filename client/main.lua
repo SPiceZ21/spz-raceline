@@ -518,6 +518,13 @@ RegisterNetEvent("spz-raceline:requestCapture", function(track)
     end
 end)
 
+-- Why a lap did not become the stored line. Printed rather than notified: it
+-- fires at a lap boundary, and "your lap was not quicker" is not worth a
+-- toast in the driver's face mid-race.
+RegisterNetEvent("spz-raceline:lapVerdict", function(track, why)
+    print(("^3[raceline] %s: %s.^7"):format(tostring(track), tostring(why)))
+end)
+
 RegisterNetEvent("spz-raceline:saved", function(track, bestMs, anchor)
     -- The freshly driven lap is the new best line — cache it and, if we're
     -- still on that track, swap the ghost immediately.
@@ -547,8 +554,17 @@ RegisterNetEvent("spz-raceline:anchors", function(list)
     Anchors = type(list) == "table" and list or {}
 end)
 
-RegisterNetEvent("spz-raceline:line", function(track, data, bestMs)
-    if type(data) ~= "table" then return end
+RegisterNetEvent("spz-raceline:line", function(track, data, bestMs, why)
+    -- An empty answer is still an answer: clear the pending token so a later
+    -- request for the same track is not mistaken for this one still being in
+    -- flight, and say why, because "no line is drawn" has several causes that
+    -- look identical from the driver's seat.
+    if type(data) ~= "table" then
+        if PendingLoad == track then PendingLoad = nil end
+        print(("^3[raceline] No line for %s: %s.^7"):format(tostring(track), why or "server sent nothing"))
+        return
+    end
+
     local pts, model, splits, motion, spec = ExpandLine(data)
     LineCache[track] = { points = pts, best = bestMs, model = model,
                          splits = splits, motion = motion, spec = spec }

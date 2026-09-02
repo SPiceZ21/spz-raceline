@@ -44,6 +44,7 @@ AddEventHandler("spz-raceline:lapCompleted", function(src, trackName, lapTimeMs)
     if not pid then
         print(("^3[raceline] No spz-identity profile for source %s — lap on %s not stored.^7")
             :format(tostring(src), trackName))
+        TriggerClientEvent("spz-raceline:lapVerdict", src, trackName, "no identity profile — line not stored")
         return
     end
 
@@ -54,6 +55,8 @@ AddEventHandler("spz-raceline:lapCompleted", function(src, trackName, lapTimeMs)
     if best and lapTimeMs >= best then
         print(("^3[raceline] %s: %d ms does not beat stored %d ms — keeping the old line.^7")
             :format(trackName, lapTimeMs, best))
+        TriggerClientEvent("spz-raceline:lapVerdict", src, trackName,
+            ("%d ms did not beat your stored %d ms"):format(lapTimeMs, best))
         return
     end
 
@@ -68,27 +71,53 @@ end)
 
 RegisterNetEvent("spz-raceline:submitCapture", function(track, payload)
     local src = source
+
+    -- This handler is the last stretch before the INSERT and it used to reject
+    -- in total silence: a line could be captured, requested, sent, and dropped
+    -- here with nothing written and nothing said. Every gate now reports, to
+    -- the server log and to the submitting client.
+    local function reject(why)
+        print(("^1[raceline] Rejected %s's line for %s: %s.^7")
+            :format(tostring(src), tostring(track), why))
+        TriggerClientEvent("spz-raceline:lapVerdict", src, track, "line rejected — " .. why)
+    end
+
     local p = Pending[src]
-    if not p or p.track ~= track or GetGameTimer() > p.expires then return end
+    if not p or p.track ~= track or GetGameTimer() > p.expires then
+        reject(not p and "no pending request (expired or never asked)"
+               or p.track ~= track and ("pending track is " .. tostring(p.track))
+               or "the 30s submission window closed")
+        return
+    end
     Pending[src] = nil
 
     -- v2/v3 payload: { v = 2|3, m = modelHash, p = { x, y, z, state, t, ... }, c = splits? }
     -- v4 adds `r`: the fixed-rate motion stream the ghost replays.
     -- v5 adds `rf` (motion stride) and `s`: the vehicle spec header.
     if type(payload) ~= "table" or type(payload.v) ~= "number"
-       or payload.v < 2 or payload.v > 5 then return end
-    if type(payload.m) ~= "number" then return end
+       or payload.v < 2 or payload.v > 5 then
+        reject("unsupported payload version " .. tostring(type(payload) == "table" and payload.v or "?"))
+        return
+    end
+    if type(payload.m) ~= "number" then reject("no vehicle model in payload") return end
     local flat = payload.p
-    if type(flat) ~= "table" then return end
+    if type(flat) ~= "table" then reject("no points array in payload") return end
 
     local n = #flat
-    if n < 10 or n % 5 ~= 0 or n > Config.MaxPoints * 5 then return end
+    if n < 10 or n % 5 ~= 0 or n > Config.MaxPoints * 5 then
+        reject(("bad points array: %d values (need a multiple of 5, 10..%d)")
+            :format(n, Config.MaxPoints * 5))
+        return
+    end
     for i = 1, n do
-        if type(flat[i]) ~= "number" then return end
+        if type(flat[i]) ~= "number" then reject("non-numeric value at point index " .. i) return end
     end
     -- Per-point times must be sane: within the lap, non-negative
     local lastT = flat[n]
-    if lastT < 0 or lastT > p.ms + 60000 then return end
+    if lastT < 0 or lastT > p.ms + 60000 then
+        reject(("last point stamped %d ms against a %d ms lap"):format(lastT, p.ms))
+        return
+    end
 
     -- v3+ carries CP split times; validate them minimally
     local splits = nil
@@ -163,6 +192,9 @@ RegisterNetEvent("spz-raceline:submitCapture", function(track, payload)
     ]], { p.pid, track, p.ms, flat[1], flat[2], flat[3],
           json.encode(stored) })
 
+    print(("^2[raceline] Stored %s for player %d: %d ms, %d points%s.^7")
+        :format(track, p.pid, p.ms, n / 5, motion and " (+ motion)" or ""))
+
     TriggerClientEvent("spz-raceline:saved", src, track, p.ms, { x = flat[1], y = flat[2], z = flat[3] })
 
     -- New TRACK record (fastest line for this track, any player)? crown.lua
@@ -206,18 +238,32 @@ RegisterNetEvent("spz-raceline:getLine", function(track)
     local src = source
     if type(track) ~= "string" then return end
 
+    -- Every failure below answers the client instead of going quiet. A request
+    -- that is never answered leaves PendingLoad set for the rest of the
+    -- session, so the display sits at track=nil and the next attempt to load
+    -- the same track is indistinguishable from a lost packet.
     local pid = PlayerDbId(src)
-    if not pid then return end
+    if not pid then
+        TriggerClientEvent("spz-raceline:line", src, track, nil, nil, "no profile")
+        return
+    end
 
     local rows = MySQL.query.await(
         "SELECT points, best_ms FROM racelines WHERE player_id = ? AND track = ? LIMIT 1",
         { pid, track }
     )
     local row = rows and rows[1]
-    if not row then return end
+    if not row then
+        TriggerClientEvent("spz-raceline:line", src, track, nil, nil, "no stored line")
+        return
+    end
 
     local ok, flat = pcall(json.decode, row.points)
-    if not ok or type(flat) ~= "table" then return end
+    if not ok or type(flat) ~= "table" then
+        print(("^1[raceline] Stored line for %s (player %d) is not decodable JSON.^7"):format(track, pid))
+        TriggerClientEvent("spz-raceline:line", src, track, nil, nil, "stored line corrupt")
+        return
+    end
 
     -- LATENT: a v5 line carries the packed motion stream (~100 KB), which a
     -- plain reliable event can silently drop — the ghost would then never load.
