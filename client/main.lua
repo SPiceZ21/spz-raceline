@@ -45,10 +45,8 @@ local LineCache   = {}      -- track -> { points = ordered array, best = ms }
 local C = Config.Colours
 local StateColour = { [0] = C.coast, [1] = C.accel, [2] = C.brake }
 
-local function Notify(msg)
-    BeginTextCommandThefeedPost("STRING")
-    AddTextComponentSubstringPlayerName(msg)
-    EndTextCommandThefeedPostTicker(false, false)
+local function Notify(msg, kind)
+    lib.notify({ title = 'Raceline', description = msg, type = kind or 'inform', duration = 3000 })
 end
 
 local function FmtMs(ms)
@@ -212,7 +210,7 @@ local function LoadDisplay(track)
     if not entry then return false end
     FillDisplay(entry.points)
     Visible, AutoShown, LoadedTrack = true, true, track
-    Notify(("Raceline: ~g~%s~s~ best line loaded (%s)"):format(track, FmtMs(entry.best or 0)))
+    Notify(("%s best line loaded (%s)"):format(track, FmtMs(entry.best or 0)))
     return true
 end
 
@@ -431,8 +429,9 @@ RegisterNetEvent("SPZ:tt:End", function()
 end)
 
 -- ── Race hooks ────────────────────────────────────────────────────────────────
--- Race lap boundaries are measured at the final checkpoint and capture runs
--- continuously, so each frozen race lap naturally contains the full loop.
+-- Circuit race laps close on the start/finish line (spz-races fires
+-- SPZ:lapComplete there) and capture runs continuously, so each frozen race lap
+-- is the full loop from the line back to the line.
 
 RegisterNetEvent("SPZ:warmupPhase", function(data)
     if data and data.track then
@@ -468,8 +467,9 @@ end)
 RegisterNetEvent("SPZ:raceFinished", function()
     if not InRace then return end
     -- Sprints never fire SPZ:lapComplete — the whole run is the lap. On
-    -- circuits every lap was already frozen at its boundary; the leftover
-    -- stub (final CP → finish line) must not overwrite it.
+    -- circuits the final lap was frozen by the SPZ:lapComplete that arrives
+    -- just before this on the line; whatever was sampled since must not
+    -- overwrite it.
     if not HadLapEvent and #Cap > 1 then
         FreezeLap()
     end
@@ -546,7 +546,7 @@ RegisterNetEvent("spz-raceline:saved", function(track, bestMs, anchor)
         Anchors[#Anchors + 1] = { track = track, best = bestMs, x = anchor.x, y = anchor.y, z = anchor.z }
     end
 
-    Notify(("Raceline: ~g~new best line saved~s~ — %s (%s)"):format(track, FmtMs(bestMs)))
+    Notify(("New best line saved — %s (%s)"):format(track, FmtMs(bestMs)), 'success')
     if TTTrack == track or RaceTrack == track then LoadDisplay(track) end
 end)
 
@@ -672,11 +672,11 @@ local function SetVisible(on)
     -- no stored lap for this track yet". The line only exists once you have set
     -- a time on the track you are standing on.
     if on and Count == 0 then
-        Notify("Raceline: display ~g~ON~s~ — no line loaded yet for this track")
+        Notify("Display ON — no line loaded yet for this track")
         return
     end
 
-    Notify(on and "Raceline: display ~g~ON~s~" or "Raceline: display ~r~OFF~s~")
+    Notify(on and "Display ON" or "Display OFF", on and 'success' or 'inform')
 end
 
 RegisterCommand("raceline", function(_, args)
@@ -690,20 +690,20 @@ RegisterCommand("raceline", function(_, args)
         if mode == "pb" or mode == "record" or mode == "pace" then
             RL_GhostSetMode(mode)
             local labels = {
-                pb     = "ghost: ~g~YOUR BEST~s~",
-                record = "ghost: ~y~TRACK RECORD~s~ (gold car)",
-                pace   = "ghost: ~b~SESSION PACE~s~ (blue car — beatable)",
+                pb     = "Ghost: your best",
+                record = "Ghost: track record (gold car)",
+                pace   = "Ghost: session pace (blue car — beatable)",
             }
-            Notify("Raceline " .. labels[mode])
+            Notify(labels[mode], 'success')
         else
             local on = RL_GhostToggle and RL_GhostToggle()
-            Notify(on and "Raceline: ghost car ~g~ON~s~" or "Raceline: ghost car ~r~OFF~s~")
+            Notify(on and "Ghost car ON" or "Ghost car OFF", on and 'success' or 'inform')
         end
     elseif sub == "panel" or sub == "" then
         -- No arguments now opens the control panel (client/panel.lua) instead of
         -- printing a usage line. The subcommands stay: they are what scripts,
         -- keybinds and muscle memory already use.
-        if RL_OpenPanel then RL_OpenPanel() else Notify("Raceline: panel unavailable") end
+        if RL_OpenPanel then RL_OpenPanel() else Notify("Panel unavailable", 'error') end
     else
         Notify("Usage: /raceline panel | show | hide | ghost [pb|record|pace]")
     end
