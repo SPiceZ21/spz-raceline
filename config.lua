@@ -30,6 +30,21 @@ Config.Colours = {
     coast = { r = 235, g = 235, b = 235, a = 100 },  -- faint white: neither
 }
 
+-- Global scale over the alphas above, 0.0-1.0. One number instead of three, so
+-- the line can be dimmed without touching the relative weighting — `coast` is
+-- deliberately fainter than `accel`/`brake` and should stay that way.
+--
+-- Default 0.5 because the line at full strength washes the road out from the
+-- driving seat; it is a reference to glance at, not a surface to drive on. The
+-- per-state alphas stay at their authored values so this reads as what it is —
+-- "half of the designed colour" — rather than burying the reduction in three
+-- separate numbers nobody can see the original of.
+--
+-- Drivers change this live in the control panel (F3 → Racing line → Opacity),
+-- and, like ribbon width and draw distance there, it is a session setting: this
+-- value is what every player starts a session with.
+Config.LineOpacity = 0.5
+
 -- ── Time-trial persistence ────────────────────────────────────────────────────
 -- Best-lap lines are stored per player per track (only when the lap time
 -- improves) and auto-load when the player comes near where the line starts.

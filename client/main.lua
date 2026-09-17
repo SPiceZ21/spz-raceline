@@ -646,13 +646,20 @@ CreateThread(function()
             -- entity alpha is no longer overridden (an explicit SetEntityAlpha
             -- pushed vehicles into the transparent pass, killing depth-write —
             -- that was what made the line paint over the bodywork).
+            -- Global opacity, resolved HERE rather than baked into the quads by
+            -- the builder above: the panel's slider then shows on the next
+            -- frame instead of on the next rebuild, up to Config.RebuildMs
+            -- later. One multiply per quad is nothing beside the four DrawPoly
+            -- calls it feeds.
+            local op = Config.LineOpacity or 1.0
             for i = 1, #Quads do
                 local q, c = Quads[i], Quads[i].c
+                local a = math.floor(c.a * op)
                 -- one-sided poly → draw both windings for either camera side
-                DrawPoly(q.ax1, q.ay1, q.az, q.ax2, q.ay2, q.az, q.bx1, q.by1, q.bz, c.r, c.g, c.b, c.a)
-                DrawPoly(q.bx1, q.by1, q.bz, q.ax2, q.ay2, q.az, q.ax1, q.ay1, q.az, c.r, c.g, c.b, c.a)
-                DrawPoly(q.ax2, q.ay2, q.az, q.bx2, q.by2, q.bz, q.bx1, q.by1, q.bz, c.r, c.g, c.b, c.a)
-                DrawPoly(q.bx1, q.by1, q.bz, q.bx2, q.by2, q.bz, q.ax2, q.ay2, q.az, c.r, c.g, c.b, c.a)
+                DrawPoly(q.ax1, q.ay1, q.az, q.ax2, q.ay2, q.az, q.bx1, q.by1, q.bz, c.r, c.g, c.b, a)
+                DrawPoly(q.bx1, q.by1, q.bz, q.ax2, q.ay2, q.az, q.ax1, q.ay1, q.az, c.r, c.g, c.b, a)
+                DrawPoly(q.ax2, q.ay2, q.az, q.bx2, q.by2, q.bz, q.bx1, q.by1, q.bz, c.r, c.g, c.b, a)
+                DrawPoly(q.bx1, q.by1, q.bz, q.bx2, q.by2, q.bz, q.ax2, q.ay2, q.az, c.r, c.g, c.b, a)
             end
             Wait(0)
         else
@@ -761,7 +768,23 @@ function RL_LineStatus()
         track   = LoadedTrack,
         auto    = AutoShown,
         best    = LoadedTrack and LineCache[LoadedTrack] and LineCache[LoadedTrack].best or nil,
+        opacity = RL_GetLineOpacity(),
     }
+end
+
+--- Line opacity as a PERCENTAGE, because that is what it is — a scale over the
+--- per-state alphas in Config.Colours, not an alpha of its own. The ghost's
+--- equivalent is raw 0-255 (RL_GhostSetAlpha) because there it IS the entity
+--- alpha; conflating the two units in one panel would be the confusing choice.
+function RL_GetLineOpacity()
+    return math.floor((Config.LineOpacity or 1.0) * 100 + 0.5)
+end
+
+function RL_SetLineOpacity(pct)
+    local v = tonumber(pct) or 100
+    if v < 0 then v = 0 elseif v > 100 then v = 100 end
+    Config.LineOpacity = v / 100
+    return v
 end
 
 function RL_ClearDisplay()
@@ -784,6 +807,12 @@ RegisterCommand("rlstatus", function()
     print(("  pending submit  : %s"):format(tostring(SubmitTrack)))
     print(("  display         : visible=%s points=%d track=%s auto=%s")
         :format(tostring(Visible), Count, tostring(LoadedTrack), tostring(AutoShown)))
+    -- "visible=true, points=900" and still nothing on the road is what an
+    -- opacity wound down to its floor looks like, so it belongs in the same
+    -- print as the rest of the quiet failures.
+    print(("  line paint      : opacity=%d%% width=%.2fm draw=%dm (accel %d/255)")
+        :format(RL_GetLineOpacity(), Config.LineWidth, math.floor(Config.DrawDistance),
+                math.floor((C.accel.a or 150) * (Config.LineOpacity or 1.0))))
 
     local n = 0
     for track, entry in pairs(LineCache) do

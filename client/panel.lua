@@ -74,6 +74,28 @@ local function lineOptions()
             end,
         },
         {
+            title       = 'Opacity',
+            -- Both the setting and what it actually costs on the road: a
+            -- percentage on its own tells you nothing about whether the line is
+            -- about to disappear over pale tarmac.
+            description = ('%d%% · green/red draw at %d/255'):format(
+                s.opacity,
+                math.floor((Config.Colours.accel.a or 150) * (Config.LineOpacity or 1.0))),
+            icon        = 'droplet',
+            onSelect    = function()
+                local r = lib.inputDialog('Racing line', {
+                    -- Floor of 10, not 0. Turning the line invisible is what
+                    -- Display is for; an opacity of zero leaves the panel
+                    -- saying "Display: ON" over a blank road, which reads as
+                    -- the feature being broken.
+                    { type = 'slider', label = 'Opacity (%)', min = 10, max = 100,
+                      default = s.opacity, step = 5 },
+                })
+                if r and r[1] then RL_SetLineOpacity(r[1]) end
+                reopen(LINE)
+            end,
+        },
+        {
             title       = 'Ribbon width',
             description = ('%.2f m'):format(Config.LineWidth),
             icon        = 'arrows-left-right',
