@@ -34,16 +34,17 @@ Config.Colours = {
 -- the line can be dimmed without touching the relative weighting — `coast` is
 -- deliberately fainter than `accel`/`brake` and should stay that way.
 --
--- Default 0.5 because the line at full strength washes the road out from the
+-- Default 0.3 because the line at full strength washes the road out from the
 -- driving seat; it is a reference to glance at, not a surface to drive on. The
 -- per-state alphas stay at their authored values so this reads as what it is —
--- "half of the designed colour" — rather than burying the reduction in three
+-- "a third of the designed colour" — rather than burying the reduction in three
 -- separate numbers nobody can see the original of.
 --
 -- Drivers change this live in the control panel (F3 → Racing line → Opacity),
 -- and, like ribbon width and draw distance there, it is a session setting: this
--- value is what every player starts a session with.
-Config.LineOpacity = 0.5
+-- value is what every player starts a session with, and anyone who wants the
+-- line bolder turns it up there without the server changing for everyone else.
+Config.LineOpacity = 0.3
 
 -- ── Time-trial persistence ────────────────────────────────────────────────────
 -- Best-lap lines are stored per player per track (only when the lap time
