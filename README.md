@@ -38,7 +38,7 @@ coasting. In time trials it also replays that lap as a translucent ghost car.
   boundary and submitted only when the server confirms the lap improved.
 - Two-stage rendering: a slow thread rebuilds the nearby segment set every
   `Config.RebuildMs`; the per-frame thread only paints it (`Config.MaxDrawSegments` cap).
-- Storage: the `racelines` table, owned by `spz-core/migrations/006_racelines.sql`. Lines
+- Storage: the `racelines` table, owned by `spz-core/migrations/races/006_racelines.sql`. Lines
   are a flat JSON array of `x, y, z, state` quadruples; the first point doubles as the
   proximity anchor.
 
