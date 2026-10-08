@@ -327,13 +327,6 @@ RegisterNetEvent("spz-raceline:getRecordLine", function(track)
         track, rec.points, rec.best, rec.holder)
 end)
 
--- Summary only (no line payload) — for menus/leaderboards
-exports("GetRecordSummary", function(track)
-    local rec = GetRecordRow(track)
-    if not rec.best then return nil end
-    return { best = rec.best, holder = rec.holder }
-end)
-
 -- A new track record just landed: drop the cached ghost-record row so the next
 -- fetch reflects the new holder immediately.
 AddEventHandler("spz-raceline:recordTaken", function(info)

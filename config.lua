@@ -48,11 +48,8 @@ Config.LineOpacity = 0.3
 
 -- ── Time-trial persistence ────────────────────────────────────────────────────
 -- Best-lap lines are stored per player per track (only when the lap time
--- improves) and auto-load when the player comes near where the line starts.
+-- improves).
 
-Config.AutoLoadRange   = 150.0   -- metres from a stored line's start to auto-show it
-Config.AutoUnloadRange = 220.0   -- hysteresis: hide again beyond this
-Config.AutoScanMs      = 3000    -- proximity check interval
 Config.LoopCloseRange  = 60.0    -- if a line ends within this of its start, close the loop
 
 -- ── Ghost car (time trials) ───────────────────────────────────────────────────

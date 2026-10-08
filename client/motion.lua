@@ -99,10 +99,6 @@ end
 
 local WHEEL_RADIUS = 0.35   -- metres; close enough for every road car
 
-function RL_WheelDriveSupported()
-    return DriveSet ~= nil
-end
-
 --- Spin every wheel as though the car were rolling at `mps` metres per second.
 function RL_WheelDrive(veh, mps)
     if not DriveSet then return end
@@ -210,10 +206,6 @@ function RL_MotReset()
     Buf = {}
 end
 
-function RL_MotClear()
-    Buf, Frozen = {}, nil
-end
-
 --- One fixed-rate snapshot of the vehicle. `tMs` = ms since lap start.
 function RL_MotSample(veh, tMs, brake, handbrake)
     local max = Config.MaxMotionSamples or 7500
@@ -280,10 +272,6 @@ end
 function RL_MotFreeze()
     Frozen = Buf
     Buf = {}
-end
-
-function RL_MotCount()
-    return #Buf
 end
 
 --- The last completed lap's samples (ready to replay locally, no round trip).

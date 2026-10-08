@@ -71,12 +71,8 @@ coasting. In time trials it also replays that lap as a translucent ghost car.
 
 | Export | Description |
 |---|---|
-| `SetLineVisible(bool)` · `IsLineVisible()` | Display toggle |
-| `GetLine()` · `LoadLine(points)` · `ClearLine()` | Read or replace the displayed line |
 | `GetLineByPlayerId(id)` | Fetch another player's stored line |
 | `GetLineByPlayerId()` | A player's stored line for a track (ghost duels) |
-| `GetRecordSummary()` | Track record summary |
-| `PublishCrown()` | Publish track crown ownership |
 
 Point format: `{ x, y, z, s, brk }` where `s` = 0 coast / 1 throttle / 2 brake.
 

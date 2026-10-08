@@ -49,7 +49,6 @@ local function PublishCrown(src, pid)
         state:set('spz:records', CountRecords(pid), true)
     end)
 end
-exports("PublishCrown", PublishCrown)
 
 -- ── Record changed hands ─────────────────────────────────────────────────────
 AddEventHandler("spz-raceline:recordTaken", function(info)

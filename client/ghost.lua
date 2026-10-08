@@ -654,10 +654,6 @@ end
 
 function RL_GhostGetMode() return GhostMode end
 
-function RL_GhostIsRunning() return Running end
-
-function RL_GhostGetTrack() return TTTrack end
-
 --- Ghost transparency, applied live. Skipped while a fade is in flight — the
 --- fade owns the alpha channel for those few hundred ms and would immediately
 --- overwrite anything set here.
@@ -669,10 +665,6 @@ function RL_GhostSetAlpha(a)
     end
     return a
 end
-
-function RL_GhostGetAlpha() return GC.alpha or 150 end
-
-function RL_GhostBlipEnabled() return ShowBlip end
 
 function RL_GhostSetBlip(on)
     ShowBlip = on and true or false
@@ -751,16 +743,6 @@ end
 -- acceleration its second, so they always agree with the path being driven.
 --   speed km/h · ms m/s · lon m/s² (+throttle / −brake) · lat m/s² cornering
 --   g / latG    the same in G · rpm 0..1 · gear
-exports('GetGhostTelemetry', function()
-    if not Running then return nil end
-    return {
-        speed = GhostTel.speed, ms   = GhostTel.ms,
-        lon   = GhostTel.lon,   lat  = GhostTel.lat,
-        g     = GhostTel.g,     latG = GhostTel.latG,
-        rpm   = GhostTel.rpm,   gear = GhostTel.gear,
-    }
-end)
-
 -- ── Diagnostic ───────────────────────────────────────────────────────────────
 -- Answers "why does the ghost feel like it runs at a constant pace?". Prints
 -- which replay path is live and the actual speed profile of the loaded lap: a

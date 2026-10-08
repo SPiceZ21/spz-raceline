@@ -722,33 +722,6 @@ RegisterCommand("racelinetoggle", function()
 end, false)
 RegisterKeyMapping("racelinetoggle", "Raceline: Toggle Display", "keyboard", "")
 
--- ── Exports ───────────────────────────────────────────────────────────────────
-
-exports("SetLineVisible", SetVisible)
-exports("IsLineVisible",  function() return Visible end)
-exports("ClearLine", function()
-    ClearLine()
-    AutoShown, LoadedTrack = false, nil
-end)
-
--- Ordered oldest → newest copy of the current display line.
-exports("GetLine", function()
-    local out = {}
-    for k = 0, Count - 1 do
-        local p = Points[OrderedIndex(k)]
-        out[k + 1] = { x = p.x, y = p.y, z = p.z, s = p.s, brk = p.brk }
-    end
-    return out
-end)
-
--- Replace the display buffer with an externally captured line (same format).
-exports("LoadLine", function(pts)
-    if type(pts) ~= "table" then return false end
-    FillDisplay(pts)
-    AutoShown, LoadedTrack = false, nil
-    return Count > 0
-end)
-
 -- ── Panel accessors (same-resource globals, read by panel.lua) ──────────────
 
 function RL_SetLineVisible(on)
@@ -866,6 +839,3 @@ function RL_GetSessionAverage(track)
     return math.floor(sum / #t)
 end
 
-function RL_GetLastLap()
-    return LastLap, LastLapModel
-end

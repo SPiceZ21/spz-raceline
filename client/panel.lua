@@ -384,4 +384,3 @@ RegisterKeyMapping('racelinepanel', 'Raceline: Control panel', 'keyboard', 'F3')
 -- this global (set at load, read at command time — never nil in practice).
 RL_OpenPanel = OpenPanel
 
-exports('OpenPanel', OpenPanel)
