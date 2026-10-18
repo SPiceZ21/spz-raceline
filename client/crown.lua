@@ -10,7 +10,6 @@ RegisterNetEvent("SPZ:recordStolen", function(d)
         description  = d.text,
         type        = "warning",
         duration    = 7000,
-        position    = "top",
         icon        = "crown",
     })
 end)
@@ -23,7 +22,6 @@ RegisterNetEvent("SPZ:trackTax", function(d)
         description  = ("+%d credits — %d record%s held")
             :format(d.credits, d.tracks or 1, (d.tracks or 1) == 1 and "" or "s"),
         type        = "success",
-        position    = "top",
         icon        = "coins",
     })
 end)
