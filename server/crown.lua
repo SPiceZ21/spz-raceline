@@ -16,7 +16,7 @@ end
 local function SrcFromPid(pid)
     for _, s in ipairs(GetPlayers()) do
         local src = tonumber(s)
-        local ok, prof = pcall(function() return exports["spz-identity"]:GetProfile(src) end)
+        local ok, prof = pcall(function() return exports["spz-core"]:GetProfile(src) end)
         if ok and prof and prof.id == pid then return src end
     end
     return nil
@@ -40,7 +40,7 @@ local function PublishCrown(src, pid)
     if not src then return end
     CreateThread(function()
         if not pid then
-            local ok, prof = pcall(function() return exports["spz-identity"]:GetProfile(src) end)
+            local ok, prof = pcall(function() return exports["spz-core"]:GetProfile(src) end)
             pid = ok and prof and prof.id or nil
         end
         if not pid then return end

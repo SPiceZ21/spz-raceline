@@ -12,7 +12,7 @@ local Pending = {}   -- src -> { track, ms, pid, expires }
 -- ── Helpers ───────────────────────────────────────────────────────────────────
 
 local function PlayerDbId(src)
-    local ok, profile = pcall(function() return exports["spz-identity"]:GetProfile(src) end)
+    local ok, profile = pcall(function() return exports["spz-core"]:GetProfile(src) end)
     return ok and profile and profile.id or nil
 end
 

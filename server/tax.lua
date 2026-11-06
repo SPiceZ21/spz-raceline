@@ -22,9 +22,9 @@ CreateThread(function()
 
             if held > 0 then
                 local pay = held * PER_TRACK
-                local profile = exports["spz-identity"]:GetProfile(src)
+                local profile = exports["spz-core"]:GetProfile(src)
                 if profile then
-                    exports["spz-identity"]:UpdateProfile(src, {
+                    exports["spz-core"]:UpdateProfile(src, {
                         credits = (profile.credits or 0) + pay,
                     })
                     TriggerClientEvent("SPZ:trackTax", src, { credits = pay, tracks = held })
