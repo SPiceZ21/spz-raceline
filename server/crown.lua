@@ -83,7 +83,7 @@ AddEventHandler("spz-raceline:recordTaken", function(info)
     })
 
     pcall(function()
-        exports["spz-log"]:Log("race", "Track Record", text, "warning")
+        exports["spz-discord"]:Log("race", "Track Record", text, "warning")
     end)
 end)
 
