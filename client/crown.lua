@@ -3,10 +3,10 @@
 -- (spz-nametag reads the spz:records statebag); this file only handles the
 -- steal toast and the ownership-tax payout notify.
 
--- Shown as a centre-screen flourish (spz-raceUI); ox_lib toast if it is off.
+-- Shown as a centre-screen flourish (race HUD, spz-races); ox_lib toast if it is off.
 local function flourish(d, toast)
-    if GetResourceState("spz-raceUI") == "started" then
-        exports["spz-raceUI"]:ShowFlourish(d)
+    if GetResourceState("spz-races") == "started" then
+        exports["spz-races"]:ShowFlourish(d)
     else
         lib.notify(toast)
     end
